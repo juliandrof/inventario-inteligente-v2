@@ -96,16 +96,14 @@ function DatasetTab({ fixtureTypes }) {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([
-      fetchTrainingGroups(),
-      fetchTrainingStats(),
-    ]).then(([grps, st]) => {
-      setGroups(Array.isArray(grps) ? grps : []);
-      setStats(st);
-      setError(null);
-    }).catch(err => {
-      setError(err.message);
-    }).finally(() => setLoading(false));
+    setError(null);
+    fetchTrainingGroups()
+      .then(grps => setGroups(Array.isArray(grps) ? grps : []))
+      .catch(err => { console.error('groups error:', err); setError(err.message); })
+      .finally(() => setLoading(false));
+    fetchTrainingStats()
+      .then(st => setStats(st))
+      .catch(err => console.error('stats error:', err));
   }, []);
 
   useEffect(() => { load(); }, [load]);

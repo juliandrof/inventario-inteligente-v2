@@ -1047,7 +1047,7 @@ async def get_training_stats():
         "total_images": total_images[0]["cnt"] if total_images else 0,
         "annotated_images": annotated_images[0]["cnt"] if annotated_images else 0,
         "total_annotations": total_annotations[0]["cnt"] if total_annotations else 0,
-        "annotations_by_type": type_counts,
+        "annotations_by_type": {row["fixture_type"]: row["count"] for row in type_counts},
         "job_stats": {row["status"]: row["count"] for row in job_stats},
         "total_models": total_models[0]["cnt"] if total_models else 0,
         "active_model": active_model[0] if active_model else None,
