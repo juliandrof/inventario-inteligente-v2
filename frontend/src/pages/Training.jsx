@@ -140,7 +140,7 @@ function DatasetTab({ fixtureTypes }) {
 
   const handleAnnotate = async (image) => {
     try {
-      const anns = await fetchImageAnnotations(image.id);
+      const anns = await fetchImageAnnotations(image.image_id);
       setAnnotatingData(anns.annotations || []);
       setAnnotatingImage(image);
     } catch (err) {
@@ -150,7 +150,7 @@ function DatasetTab({ fixtureTypes }) {
 
   const handleSaveAnnotations = async (annotations) => {
     try {
-      await saveAnnotations(annotatingImage.id, annotations);
+      await saveAnnotations(annotatingImage.image_id, annotations);
       setAnnotatingImage(null);
       setAnnotatingData(null);
       load();
@@ -160,16 +160,16 @@ function DatasetTab({ fixtureTypes }) {
   };
 
   const handleAutoAnnotate = async (image) => {
-    setAutoAnnotatingIds(prev => new Set([...prev, image.id]));
+    setAutoAnnotatingIds(prev => new Set([...prev, image.image_id]));
     try {
-      await autoAnnotate(image.id);
+      await autoAnnotate(image.image_id);
       load();
     } catch (err) {
       setError(err.message);
     } finally {
       setAutoAnnotatingIds(prev => {
         const next = new Set(prev);
-        next.delete(image.id);
+        next.delete(image.image_id);
         return next;
       });
     }
@@ -241,7 +241,7 @@ function DatasetTab({ fixtureTypes }) {
       ) : (
         <div className="training-image-grid">
           {images.map(img => (
-            <div key={img.id} className="training-image-card">
+            <div key={img.image_id} className="training-image-card">
               <div className="training-image-thumb-area">
                 <img
                   src={img.thumbnail_url || img.image_url}
@@ -263,11 +263,11 @@ function DatasetTab({ fixtureTypes }) {
                   <button
                     className="btn btn-sm btn-secondary"
                     onClick={() => handleAutoAnnotate(img)}
-                    disabled={autoAnnotatingIds.has(img.id)}
+                    disabled={autoAnnotatingIds.has(img.image_id)}
                   >
-                    {autoAnnotatingIds.has(img.id) ? 'Anotando...' : 'Auto-anotar com IA'}
+                    {autoAnnotatingIds.has(img.image_id) ? 'Anotando...' : 'Auto-anotar com IA'}
                   </button>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(img.id)}>
+                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(img.image_id)}>
                     Excluir
                   </button>
                 </div>
@@ -280,7 +280,7 @@ function DatasetTab({ fixtureTypes }) {
       {/* Annotation Editor modal */}
       {annotatingImage && annotatingData !== null && (
         <AnnotationEditor
-          imageId={annotatingImage.id}
+          imageId={annotatingImage.image_id}
           imageSrc={annotatingImage.image_url}
           initialAnnotations={annotatingData}
           fixtureTypes={ftArray}
@@ -477,11 +477,11 @@ function TrainingTab() {
       ) : (
         <div className="training-jobs-list">
           {jobs.map(job => {
-            const detail = jobDetails[job.id];
-            const isExpanded = expandedJobId === job.id;
+            const detail = jobDetails[job.job_id];
+            const isExpanded = expandedJobId === job.job_id;
             return (
-              <div key={job.id} className="card training-job-card">
-                <div className="training-job-header" onClick={() => handleExpandJob(job.id)}>
+              <div key={job.job_id} className="card training-job-card">
+                <div className="training-job-header" onClick={() => handleExpandJob(job.job_id)}>
                   <div className="training-job-header-left">
                     <span className="status-badge" style={{ background: JOB_STATUS_COLORS[job.status] || '#666' }}>
                       {JOB_STATUS_LABELS[job.status] || job.status}
@@ -518,7 +518,7 @@ function TrainingTab() {
                         )}
 
                         <div style={{ marginTop: 16 }}>
-                          <button className="btn btn-primary" onClick={() => handlePublish(job.id)}>
+                          <button className="btn btn-primary" onClick={() => handlePublish(job.job_id)}>
                             Publicar Modelo
                           </button>
                         </div>
@@ -744,7 +744,7 @@ function ModelsTab() {
             </thead>
             <tbody>
               {models.map(model => (
-                <tr key={model.id}>
+                <tr key={model.model_id}>
                   <td className="filename">{model.name}</td>
                   <td>{model.version || '-'}</td>
                   <td>{model.created_at ? new Date(model.created_at).toLocaleDateString('pt-BR') : '-'}</td>
@@ -761,11 +761,11 @@ function ModelsTab() {
                   <td>
                     <div style={{ display: 'flex', gap: 6 }}>
                       {!model.is_active && (
-                        <button className="btn btn-sm btn-primary" onClick={() => handleActivate(model.id)}>
+                        <button className="btn btn-sm btn-primary" onClick={() => handleActivate(model.model_id)}>
                           Ativar
                         </button>
                       )}
-                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(model.id)}>
+                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(model.model_id)}>
                         Excluir
                       </button>
                     </div>
