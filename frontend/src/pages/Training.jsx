@@ -176,7 +176,7 @@ function DatasetTab({ fixtureTypes }) {
   const handleAnnotate = async (image) => {
     try {
       const anns = await fetchImageAnnotations(image.image_id);
-      setAnnotatingData(anns.annotations || anns || []);
+      setAnnotatingData(Array.isArray(anns) ? anns : anns.annotations || []);
       setAnnotatingImage(image);
     } catch (err) { setError(err.message); }
   };
@@ -184,18 +184,26 @@ function DatasetTab({ fixtureTypes }) {
   const handleSaveAnnotations = async (annotations) => {
     try {
       await saveAnnotations(annotatingImage.image_id, annotations);
+      // Close editor first, then refresh in background without re-rendering editor
       setAnnotatingImage(null);
       setAnnotatingData(null);
-      load();
-      if (openGroup) handleOpenGroup(openGroup);
+      // Lightweight refresh: just reload groups stats, not full re-render
+      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
+      fetchTrainingStats().then(st => setStats(st)).catch(() => {});
+      if (openGroup) {
+        fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
+      }
     } catch (err) { setError(err.message); }
   };
 
   const handleAutoAnnotateFrame = async (image) => {
     try {
       await autoAnnotate(image.image_id);
-      if (openGroup) handleOpenGroup(openGroup);
-      load();
+      // Only refresh the frames list, not the whole page
+      if (openGroup) {
+        fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
+      }
+      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
     } catch (err) { setError(err.message); }
   };
 

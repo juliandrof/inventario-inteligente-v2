@@ -315,9 +315,8 @@ function AnnotationEditor({ imageId, imageSrc, initialAnnotations, fixtureTypes,
       if (dragRef.current) {
         dragRef.current = null;
         setDragRender(r => r + 1);
-      } else {
-        onClose();
       }
+      // Don't close on Escape - use X button or Cancelar only
     }
   }, [selectedIdx, deleteAnnotation, onClose]);
 
@@ -380,7 +379,7 @@ function AnnotationEditor({ imageId, imageSrc, initialAnnotations, fixtureTypes,
   const drawColor = typeColorMap[selectedType] || '#888';
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="annotation-editor-modal" onClick={e => e.stopPropagation()}>
         <div className="annotation-editor-header">
           <h3>Anotacao de Imagem</h3>
