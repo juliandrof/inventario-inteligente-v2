@@ -101,13 +101,27 @@ function DatasetTab({ fixtureTypes }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const [uploadMessage, setUploadMessage] = useState(null);
+
   const handleUpload = async (files) => {
     if (!files || files.length === 0) return;
     setUploading(true);
     setError(null);
+    setUploadMessage(null);
     try {
+      const messages = [];
       for (const file of files) {
-        await uploadTrainingImage(file);
+        const result = await uploadTrainingImage(file);
+        // Backend returns multiple image records for video files (one per extracted frame)
+        if (result && Array.isArray(result.images) && result.images.length > 1) {
+          messages.push(`${result.images.length} frames extraidos do video "${file.name}"`);
+        } else if (result && result.frames_extracted) {
+          messages.push(`${result.frames_extracted} frames extraidos do video "${file.name}"`);
+        }
+      }
+      if (messages.length > 0) {
+        setUploadMessage(messages.join('. '));
+        setTimeout(() => setUploadMessage(null), 6000);
       }
       load();
     } catch (err) {
@@ -194,7 +208,7 @@ function DatasetTab({ fixtureTypes }) {
             <span className="training-stat-value">{stats.total_annotations || 0}</span>
             <span className="training-stat-label">Anotacoes</span>
           </div>
-          {stats.annotations_by_type && Object.entries(stats.annotations_by_type).map(([type, count]) => (
+          {Object.entries(stats.annotations_by_type || stats.annotations_per_type || {}).map(([type, count]) => (
             <span
               key={type}
               className="fixture-type-badge"
@@ -207,6 +221,12 @@ function DatasetTab({ fixtureTypes }) {
       )}
 
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
+
+      {uploadMessage && (
+        <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}>
+          <span style={{ color: '#166534' }}>{uploadMessage}</span>
+        </div>
+      )}
 
       {/* Upload zone */}
       <div
@@ -499,14 +519,24 @@ function TrainingTab() {
 
                 {isExpanded && (
                   <div className="training-job-details">
-                    {job.status === 'COMPLETED' && (
+                    {job.status === 'COMPLETED' && (() => {
+                      const parsedMetrics = (() => {
+                        try {
+                          if (job.metrics_json) return JSON.parse(job.metrics_json);
+                        } catch (_) {}
+                        try {
+                          if (detail?.metrics_json) return JSON.parse(detail.metrics_json);
+                        } catch (_) {}
+                        return detail || {};
+                      })();
+                      return (
                       <>
                         {/* Metrics */}
                         <div className="training-metrics-grid">
-                          <MetricCard label="mAP@50" value={job.map50 ?? detail?.map50} />
-                          <MetricCard label="mAP@50-95" value={job.map50_95 ?? detail?.map50_95} />
-                          <MetricCard label="Precision" value={job.precision ?? detail?.precision} />
-                          <MetricCard label="Recall" value={job.recall ?? detail?.recall} />
+                          <MetricCard label="mAP@50" value={parsedMetrics.map50} />
+                          <MetricCard label="mAP@50-95" value={parsedMetrics.map50_95} />
+                          <MetricCard label="Precision" value={parsedMetrics.precision} />
+                          <MetricCard label="Recall" value={parsedMetrics.recall} />
                         </div>
 
                         {/* Confusion matrix */}
@@ -523,17 +553,25 @@ function TrainingTab() {
                           </button>
                         </div>
                       </>
-                    )}
+                      );
+                    })()}
 
                     {job.status === 'RUNNING' && (
-                      <div className="training-job-progress">
+                      <div className="training-job-progress" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12 }}>
                         <div className="training-progress-bar-track">
                           <div
-                            className="training-progress-bar-fill"
-                            style={{ width: `${job.progress_pct || 0}%` }}
+                            className="training-progress-bar-fill training-progress-bar-indeterminate"
+                            style={{ width: '30%', animation: 'training-progress-slide 1.5s ease-in-out infinite' }}
                           />
                         </div>
-                        <span className="training-progress-label">{Math.round(job.progress_pct || 0)}%</span>
+                        <span className="training-progress-label">Treinando...</span>
+                        <style>{`
+                          @keyframes training-progress-slide {
+                            0% { margin-left: 0%; }
+                            50% { margin-left: 70%; }
+                            100% { margin-left: 0%; }
+                          }
+                        `}</style>
                       </div>
                     )}
 
@@ -733,7 +771,6 @@ function ModelsTab() {
             <thead>
               <tr>
                 <th>Nome</th>
-                <th>Versao</th>
                 <th>Criado em</th>
                 <th>mAP@50</th>
                 <th>Precision</th>
@@ -745,8 +782,7 @@ function ModelsTab() {
             <tbody>
               {models.map(model => (
                 <tr key={model.model_id}>
-                  <td className="filename">{model.name}</td>
-                  <td>{model.version || '-'}</td>
+                  <td className="filename">{model.model_name || '-'}</td>
                   <td>{model.created_at ? new Date(model.created_at).toLocaleDateString('pt-BR') : '-'}</td>
                   <td>{model.map50 != null ? (model.map50 * 100).toFixed(1) + '%' : '-'}</td>
                   <td>{model.precision != null ? (model.precision * 100).toFixed(1) + '%' : '-'}</td>
