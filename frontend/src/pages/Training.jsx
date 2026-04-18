@@ -90,8 +90,8 @@ function DatasetTab({ fixtureTypes }) {
     Promise.all([
       fetchTrainingImages(),
       fetchTrainingStats(),
-    ]).then(([imgs, st]) => {
-      setImages(imgs);
+    ]).then(([imgsResp, st]) => {
+      setImages(imgsResp.images || imgsResp || []);
       setStats(st);
       setError(null);
     }).catch(err => {
@@ -309,7 +309,7 @@ function TrainingTab() {
   const loadJobs = useCallback(() => {
     setLoading(true);
     fetchTrainingJobs()
-      .then(setJobs)
+      .then(resp => setJobs(resp.jobs || resp || []))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -637,7 +637,7 @@ function ModelsTab() {
       fetchTrainedModels(),
       fetchDetectionMode(),
     ]).then(([mdls, dm]) => {
-      setModels(mdls);
+      setModels(mdls.models || mdls || []);
       setDetectionModeState(dm.mode || 'llm');
       setError(null);
     }).catch(err => {
