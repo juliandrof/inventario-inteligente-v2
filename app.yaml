@@ -1,0 +1,103 @@
+command:
+  - uvicorn
+  - app:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
+env:
+  - name: DBXSC_AI_DB_HOST
+    value: "ep-restless-cake-d2jpldze.database.us-east-1.cloud.databricks.com"
+  - name: DBXSC_AI_DB_PORT
+    value: "5432"
+  - name: DBXSC_AI_DB_NAME
+    value: "scenic_crawler"
+  - name: DBXSC_AI_DB_SCHEMA
+    value: "public"
+  - name: DBXSC_AI_LAKEBASE_PROJECT
+    value: "scenic-crawler"
+  - name: DBXSC_AI_LAKEBASE_BRANCH
+    value: "production"
+  - name: DBXSC_AI_LAKEBASE_ENDPOINT
+    value: "primary"
+  - name: DBXSC_AI_DB_USER
+    value: "2444891e-3dfa-44c3-9d7b-0837b6e5112d"
+  - name: DBXSC_AI_DB_PASSWORD
+    value: "eOaIb-IWqq7iCLsk3wQSnb5Zwl_2f4kG"
+  - name: FMAPI_MODEL
+    value: "databricks-claude-opus-4-7"
+  - name: VIDEO_VOLUME
+    value: "/Volumes/jsf_demo_catalog/scenic_crawler/uploaded_videos"
+  - name: THUMBNAIL_VOLUME
+    value: "/Volumes/jsf_demo_catalog/scenic_crawler/thumbnails"
+  - name: TRAINING_VOLUME
+    value: "/Volumes/jsf_demo_catalog/scenic_crawler/training_images"
+resources:
+  - name: llama-4-maverick
+    serving_endpoint:
+      name: databricks-llama-4-maverick
+      permission: CAN_QUERY
+  - name: claude-opus-4-1
+    serving_endpoint:
+      name: databricks-claude-opus-4-1
+      permission: CAN_QUERY
+  - name: claude-opus-4-5
+    serving_endpoint:
+      name: databricks-claude-opus-4-5
+      permission: CAN_QUERY
+  - name: claude-opus-4-6
+    serving_endpoint:
+      name: databricks-claude-opus-4-6
+      permission: CAN_QUERY
+  - name: claude-opus-4-7
+    serving_endpoint:
+      name: databricks-claude-opus-4-7
+      permission: CAN_QUERY
+  - name: claude-sonnet-4
+    serving_endpoint:
+      name: databricks-claude-sonnet-4
+      permission: CAN_QUERY
+  - name: claude-sonnet-4-5
+    serving_endpoint:
+      name: databricks-claude-sonnet-4-5
+      permission: CAN_QUERY
+  - name: claude-sonnet-4-6
+    serving_endpoint:
+      name: databricks-claude-sonnet-4-6
+      permission: CAN_QUERY
+  - name: gpt-5
+    serving_endpoint:
+      name: databricks-gpt-5
+      permission: CAN_QUERY
+  - name: gpt-5-1
+    serving_endpoint:
+      name: databricks-gpt-5-1
+      permission: CAN_QUERY
+  - name: gpt-5-2
+    serving_endpoint:
+      name: databricks-gpt-5-2
+      permission: CAN_QUERY
+  - name: gpt-5-4
+    serving_endpoint:
+      name: databricks-gpt-5-4
+      permission: CAN_QUERY
+  - name: gpt-5-mini
+    serving_endpoint:
+      name: databricks-gpt-5-mini
+      permission: CAN_QUERY
+  - name: gpt-5-nano
+    serving_endpoint:
+      name: databricks-gpt-5-nano
+      permission: CAN_QUERY
+  - name: gemini-2-5-flash
+    serving_endpoint:
+      name: databricks-gemini-2-5-flash
+      permission: CAN_QUERY
+  - name: gemini-2-5-pro
+    serving_endpoint:
+      name: databricks-gemini-2-5-pro
+      permission: CAN_QUERY
+  - name: gemma-3-12b
+    serving_endpoint:
+      name: databricks-gemma-3-12b
+      permission: CAN_QUERY
