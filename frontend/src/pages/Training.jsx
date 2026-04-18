@@ -226,7 +226,7 @@ function DatasetTab({ fixtureTypes }) {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           multiple
           style={{ display: 'none' }}
           onChange={e => handleUpload(e.target.files)}
