@@ -18,9 +18,9 @@ const TABS = [
 ];
 
 const MODEL_SIZES = [
-  { value: 'yolov8n', label: 'YOLOv8n', desc: 'Nano - Rapido', detail: 'Menor modelo, inferencia mais rapida. Ideal para dispositivos com recursos limitados.' },
-  { value: 'yolov8s', label: 'YOLOv8s', desc: 'Small - Equilibrado', detail: 'Bom equilibrio entre velocidade e precisao. Recomendado para a maioria dos casos.' },
-  { value: 'yolov8m', label: 'YOLOv8m', desc: 'Medium - Preciso', detail: 'Maior precisao, requer mais recursos. Ideal quando a acuracia e prioridade.' },
+  { value: 'n', label: 'YOLOv8n', desc: 'Nano - Rapido', detail: 'Menor modelo, inferencia mais rapida. Ideal para dispositivos com recursos limitados.' },
+  { value: 's', label: 'YOLOv8s', desc: 'Small - Equilibrado', detail: 'Bom equilibrio entre velocidade e precisao. Recomendado para a maioria dos casos.' },
+  { value: 'm', label: 'YOLOv8m', desc: 'Medium - Preciso', detail: 'Maior precisao, requer mais recursos. Ideal quando a acuracia e prioridade.' },
 ];
 
 const JOB_STATUS_COLORS = {
@@ -332,7 +332,7 @@ function TrainingTab() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showConfig, setShowConfig] = useState(false);
-  const [modelSize, setModelSize] = useState('yolov8s');
+  const [modelSize, setModelSize] = useState('s');
   const [epochs, setEpochs] = useState(100);
   const [batchSize, setBatchSize] = useState(16);
   const [starting, setStarting] = useState(false);
