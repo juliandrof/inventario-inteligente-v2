@@ -224,6 +224,11 @@ async def list_training_images(limit: int = Query(100), offset: int = Query(0)):
         LIMIT %(limit)s OFFSET %(offset)s
     """, {"limit": limit, "offset": offset})
 
+    # Add image_url for frontend display
+    for img in images:
+        img["image_url"] = f"/api/training/images/{img['image_id']}/stream"
+        img["thumbnail_url"] = img["image_url"]
+
     total = execute_query("SELECT COUNT(*) as cnt FROM training_images")
     return {"images": images, "total": total[0]["cnt"] if total else 0}
 
@@ -246,6 +251,8 @@ async def get_training_image(image_id: int):
     """, {"iid": image_id})
 
     result = dict(rows[0])
+    result["image_url"] = f"/api/training/images/{image_id}/stream"
+    result["thumbnail_url"] = result["image_url"]
     result["annotations"] = annotations
     return result
 
