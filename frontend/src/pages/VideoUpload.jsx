@@ -88,7 +88,7 @@ function VideoUpload({ navigate }) {
             <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><path d="M24 8v24M24 8l-8 8M24 8l8 8M8 34v4a2 2 0 002 2h28a2 2 0 002-2v-4" stroke="var(--app-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </div>
           <p>Arraste arquivos aqui ou clique para selecionar</p>
-          <p className="upload-hint">Videos: MP4, AVI, MOV, MKV, WebM | Fotos: JPG, PNG, BMP, WebP</p>
+          <p className="upload-hint">Videos: MP4, AVI, MOV, MKV, WebM, M4V, MPG, WMV, FLV, 3GP, TS | Fotos: JPG, PNG, BMP, WebP</p>
         </div>
       </div>
 
