@@ -166,21 +166,90 @@ _ensure_tables()
 
 @router.post("/images/upload")
 async def upload_training_image(file: UploadFile = File(...)):
-    """Upload a training image to Volume."""
+    """Upload a training image (or video, extracting 1 frame/sec) to Volume."""
+    import io
+    import cv2
+    import numpy as np
+    from PIL import Image as PILImage
+
     filename = file.filename or f"image_{int(time.time() * 1000)}.jpg"
 
     content = await file.read()
     if not content:
         raise HTTPException(400, "Empty file")
 
-    # Determine image dimensions
+    ext = os.path.splitext(filename)[1].lstrip(".").lower()
+    video_exts = {"mp4", "avi", "mov", "mkv", "webm", "m4v", "mpg", "mpeg", "wmv", "flv", "3gp", "ts"}
+
+    if ext in video_exts:
+        # --- Video: extract frames at 1 fps ---
+        tmp_video = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        try:
+            tmp_video.write(content)
+            tmp_video.close()
+
+            cap = cv2.VideoCapture(tmp_video.name)
+            if not cap.isOpened():
+                raise HTTPException(400, "Could not open video file")
+
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_interval = max(1, int(round(fps)))  # frames per second
+
+            w_client = get_workspace_client()
+            name_base = os.path.splitext(filename)[0]
+            created_records = []
+            frame_idx = 0
+            seconds = 0
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_idx % frame_interval == 0:
+                    # Encode frame as JPEG
+                    _, jpeg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    jpeg_bytes = jpeg_buf.tobytes()
+                    h_frame, w_frame = frame.shape[:2]
+
+                    frame_filename = f"{name_base}_frame_{seconds}s.jpg"
+                    frame_volume_path = f"{TRAINING_IMAGES_VOLUME}/{frame_filename}"
+
+                    # Upload frame to Volume
+                    w_client.files.upload(frame_volume_path, io.BytesIO(jpeg_bytes), overwrite=True)
+
+                    image_id = int(time.time() * 1000) + seconds
+                    execute_update("""
+                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, uploaded_at)
+                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, NOW())
+                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame})
+
+                    created_records.append({
+                        "image_id": image_id,
+                        "filename": frame_filename,
+                        "volume_path": frame_volume_path,
+                        "width": w_frame,
+                        "height": h_frame,
+                    })
+                    seconds += 1
+                frame_idx += 1
+
+            cap.release()
+        finally:
+            if os.path.exists(tmp_video.name):
+                os.unlink(tmp_video.name)
+
+        if not created_records:
+            raise HTTPException(400, "No frames could be extracted from video")
+
+        return {"images": created_records, "frames_extracted": len(created_records)}
+
+    # --- Regular image upload ---
     width, height = 0, 0
     tmp = tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1], delete=False)
     try:
         tmp.write(content)
         tmp.close()
         try:
-            from PIL import Image as PILImage
             img = PILImage.open(tmp.name)
             width, height = img.width, img.height
         except Exception as e:
@@ -192,9 +261,8 @@ async def upload_training_image(file: UploadFile = File(...)):
     # Upload to Volume
     volume_path = f"{TRAINING_IMAGES_VOLUME}/{filename}"
     try:
-        import io
-        w = get_workspace_client()
-        w.files.upload(volume_path, io.BytesIO(content), overwrite=True)
+        w_client = get_workspace_client()
+        w_client.files.upload(volume_path, io.BytesIO(content), overwrite=True)
     except Exception as e:
         raise HTTPException(500, f"Failed to upload to Volume: {e}")
 
@@ -250,10 +318,20 @@ async def get_training_image(image_id: int):
         ORDER BY annotation_id
     """, {"iid": image_id})
 
+    # Map DB field names to frontend-expected names
+    mapped_annotations = []
+    for ann in annotations:
+        mapped = dict(ann)
+        mapped["x"] = mapped.pop("x_center")
+        mapped["y"] = mapped.pop("y_center")
+        mapped["w"] = mapped.pop("width")
+        mapped["h"] = mapped.pop("height")
+        mapped_annotations.append(mapped)
+
     result = dict(rows[0])
     result["image_url"] = f"/api/training/images/{image_id}/stream"
     result["thumbnail_url"] = result["image_url"]
-    result["annotations"] = annotations
+    result["annotations"] = mapped_annotations
     return result
 
 
@@ -422,10 +500,9 @@ async def auto_annotate_image(image_id: int):
         y_center = float(pos.get("y", 50))
         fixture_type = det.get("type", "UNKNOWN")
 
-        # Estimate bounding box size (default ~20% width, ~25% height)
-        # These are reasonable defaults for retail fixtures in store images
-        est_w = 20.0
-        est_h = 25.0
+        # Use bbox dimensions from FMAPI if available, otherwise fallback to 15%/20%
+        est_w = float(det.get("bbox_w", 0) or 0) or 15.0
+        est_h = float(det.get("bbox_h", 0) or 0) or 20.0
 
         ann_id = int(time.time() * 1000) + annotations_created
         execute_update("""
@@ -512,7 +589,17 @@ async def get_annotations(image_id: int):
         ORDER BY annotation_id
     """, {"iid": image_id})
 
-    return {"image_id": image_id, "annotations": annotations}
+    # Map DB field names to frontend-expected names
+    mapped_annotations = []
+    for ann in annotations:
+        mapped = dict(ann)
+        mapped["x"] = mapped.pop("x_center")
+        mapped["y"] = mapped.pop("y_center")
+        mapped["w"] = mapped.pop("width")
+        mapped["h"] = mapped.pop("height")
+        mapped_annotations.append(mapped)
+
+    return {"image_id": image_id, "annotations": mapped_annotations}
 
 
 # ===========================================================================
@@ -896,7 +983,7 @@ async def get_training_stats():
         "total_images": total_images[0]["cnt"] if total_images else 0,
         "annotated_images": annotated_images[0]["cnt"] if annotated_images else 0,
         "total_annotations": total_annotations[0]["cnt"] if total_annotations else 0,
-        "annotations_per_type": type_counts,
+        "annotations_by_type": type_counts,
         "job_stats": {row["status"]: row["count"] for row in job_stats},
         "total_models": total_models[0]["cnt"] if total_models else 0,
         "active_model": active_model[0] if active_model else None,
