@@ -297,13 +297,37 @@ async def stream_training_image(image_id: int):
         "jpg": "image/jpeg", "jpeg": "image/jpeg",
         "png": "image/png", "webp": "image/webp",
         "gif": "image/gif", "bmp": "image/bmp",
+        "mp4": "video/mp4", "avi": "video/x-msvideo", "mov": "video/quicktime",
+        "mkv": "video/x-matroska", "webm": "video/webm", "m4v": "video/mp4",
     }
-    mime = mime_map.get(ext, "image/jpeg")
+    mime = mime_map.get(ext, "application/octet-stream")
+    is_video = mime.startswith("video/")
 
     try:
         w = get_workspace_client()
         resp = w.files.download(rows[0]["volume_path"])
         content = resp.contents.read()
+
+        # For videos, extract first frame as JPEG thumbnail
+        if is_video:
+            try:
+                import cv2
+                import numpy as np
+                nparr = np.frombuffer(content, np.uint8)
+                tmp_path = f"/tmp/train_thumb_{image_id}.{ext}"
+                with open(tmp_path, "wb") as f:
+                    f.write(content)
+                cap = cv2.VideoCapture(tmp_path)
+                ret, frame = cap.read()
+                cap.release()
+                os.remove(tmp_path)
+                if ret:
+                    _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    content = jpeg.tobytes()
+                    mime = "image/jpeg"
+            except Exception as thumb_err:
+                logger.warning(f"Could not extract video thumbnail: {thumb_err}")
+
         return Response(
             content=content,
             media_type=mime,
