@@ -315,9 +315,14 @@ async def list_group_frames(source_name: str):
     return images
 
 
+import threading
+
+_auto_annotate_jobs = {}  # source_name -> {status, progress, total, done, errors}
+
+
 @router.post("/groups/{source_name}/auto-annotate-all")
 async def auto_annotate_group(source_name: str):
-    """Auto-annotate all frames in a source group."""
+    """Start auto-annotation for all frames in background."""
     images = execute_query("""
         SELECT image_id FROM training_images
         WHERE COALESCE(source_group, filename) = %(sg)s
@@ -326,23 +331,36 @@ async def auto_annotate_group(source_name: str):
     if not images:
         raise HTTPException(404, "Group not found")
 
-    results = []
-    for img in images:
-        try:
-            # Reuse the single-image auto-annotate logic
-            from starlette.testclient import TestClient
-            # Call the auto_annotate_image function directly
-            result = await auto_annotate_image(img["image_id"])
-            results.append({"image_id": img["image_id"], "status": "ok", "annotations": result.get("annotations_created", 0)})
-        except Exception as e:
-            results.append({"image_id": img["image_id"], "status": "error", "error": str(e)[:200]})
+    if source_name in _auto_annotate_jobs and _auto_annotate_jobs[source_name]["status"] == "RUNNING":
+        return _auto_annotate_jobs[source_name]
 
-    return {
-        "source_name": source_name,
-        "total_frames": len(images),
-        "results": results,
-        "success_count": sum(1 for r in results if r["status"] == "ok"),
-    }
+    job = {"status": "RUNNING", "total": len(images), "done": 0, "errors": 0, "source_name": source_name}
+    _auto_annotate_jobs[source_name] = job
+
+    def run():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        for img in images:
+            try:
+                loop.run_until_complete(auto_annotate_image(img["image_id"]))
+            except Exception:
+                job["errors"] += 1
+            job["done"] += 1
+        loop.close()
+        job["status"] = "COMPLETED"
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return job
+
+
+@router.get("/groups/{source_name}/auto-annotate-status")
+async def auto_annotate_status(source_name: str):
+    """Poll auto-annotation progress."""
+    job = _auto_annotate_jobs.get(source_name)
+    if not job:
+        return {"status": "NOT_STARTED"}
+    return job
 
 
 @router.get("/images")

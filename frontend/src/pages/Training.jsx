@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup,
+  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus,
   fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
   startTrainingJob, fetchTrainingJobs, fetchJobDetail,
@@ -144,16 +144,33 @@ function DatasetTab({ fixtureTypes }) {
     setLoadingFrames(false);
   };
 
+  const [annotateProgress, setAnnotateProgress] = useState(null); // {done, total, status}
+
   const handleAutoAnnotateGroup = async (sourceName) => {
     setAutoAnnotatingGroup(sourceName);
+    setAnnotateProgress(null);
     try {
-      const result = await autoAnnotateGroup(sourceName);
-      setUploadMessage(`Auto-anotacao concluida: ${result.success_count}/${result.total_frames} frames anotados`);
-      setTimeout(() => setUploadMessage(null), 6000);
-      load();
-      if (openGroup === sourceName) handleOpenGroup(sourceName); // refresh frames
-    } catch (err) { setError(err.message); }
-    setAutoAnnotatingGroup(null);
+      await autoAnnotateGroup(sourceName);
+      // Poll for progress
+      const poll = setInterval(async () => {
+        try {
+          const status = await autoAnnotateGroupStatus(sourceName);
+          setAnnotateProgress(status);
+          if (status.status === 'COMPLETED') {
+            clearInterval(poll);
+            setAutoAnnotatingGroup(null);
+            setAnnotateProgress(null);
+            setUploadMessage(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
+            setTimeout(() => setUploadMessage(null), 6000);
+            load();
+            if (openGroup === sourceName) handleOpenGroup(sourceName);
+          }
+        } catch (e) { /* keep polling */ }
+      }, 2000);
+    } catch (err) {
+      setError(err.message);
+      setAutoAnnotatingGroup(null);
+    }
   };
 
   const handleAnnotate = async (image) => {
@@ -257,7 +274,9 @@ function DatasetTab({ fixtureTypes }) {
                   </button>
                   <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
                     onClick={() => handleAutoAnnotateGroup(g.source_name)}>
-                    {autoAnnotatingGroup === g.source_name ? 'Anotando todos...' : 'Auto-anotar com IA'}
+                    {autoAnnotatingGroup === g.source_name
+                      ? (annotateProgress ? `Anotando ${annotateProgress.done}/${annotateProgress.total}...` : 'Iniciando...')
+                      : 'Auto-anotar com IA'}
                   </button>
                 </div>
               </div>
