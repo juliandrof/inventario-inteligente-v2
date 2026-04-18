@@ -774,8 +774,40 @@ body {
   .training-model-size-grid { grid-template-columns: 1fr; }
   .detection-mode-grid { grid-template-columns: 1fr; }
 }
+/* Training Groups */
+.training-group-header {
+  display: flex; align-items: center; gap: 16px; padding: 12px 16px;
+  cursor: pointer; transition: background 0.2s;
+}
+.training-group-header:hover { background: #f8fafc; }
+.training-group-thumb { width: 80px; height: 60px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+.training-group-info { flex: 1; min-width: 0; }
+.training-group-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.training-group-meta { font-size: 12px; color: #888; margin-top: 2px; }
+.training-group-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.training-frames-panel { border-top: 1px solid #e5e7eb; padding: 16px; background: #f8fafc; }
+.training-frame-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.training-frame-card {
+  background: white; border-radius: 8px; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: box-shadow 0.2s;
+}
+.training-frame-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.training-frame-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
+.training-frame-info {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 8px; font-size: 11px;
+}
+.training-frame-name { color: #666; font-family: monospace; }
+.training-frame-ann-badge {
+  background: #10B981; color: white; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 600;
+}
+.training-frame-actions { display: flex; gap: 4px; padding: 4px 8px 8px; }
+
 @media (max-width: 768px) {
   .training-image-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .training-stats-bar { flex-direction: column; align-items: flex-start; }
   .training-stat { border-right: none; border-bottom: 1px solid #e5e7eb; padding: 8px 0; }
+  .training-frame-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
 }

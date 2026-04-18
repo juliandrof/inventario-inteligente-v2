@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup,
   fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
   startTrainingJob, fetchTrainingJobs, fetchJobDetail,
@@ -74,24 +75,32 @@ function Training() {
 
 /* ========== DATASET TAB ========== */
 function DatasetTab({ fixtureTypes }) {
-  const [images, setImages] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState(null);
+  const [uploadMessage, setUploadMessage] = useState(null);
+  const fileInputRef = useRef(null);
+
+  // Frame browser state
+  const [openGroup, setOpenGroup] = useState(null);
+  const [frames, setFrames] = useState([]);
+  const [loadingFrames, setLoadingFrames] = useState(false);
+  const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
+
+  // Annotation editor state
   const [annotatingImage, setAnnotatingImage] = useState(null);
   const [annotatingData, setAnnotatingData] = useState(null);
-  const [autoAnnotatingIds, setAutoAnnotatingIds] = useState(new Set());
-  const [error, setError] = useState(null);
-  const fileInputRef = useRef(null);
 
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
-      fetchTrainingImages(),
+      fetchTrainingGroups(),
       fetchTrainingStats(),
-    ]).then(([imgsResp, st]) => {
-      setImages(imgsResp.images || imgsResp || []);
+    ]).then(([grps, st]) => {
+      setGroups(Array.isArray(grps) ? grps : []);
       setStats(st);
       setError(null);
     }).catch(err => {
@@ -100,8 +109,6 @@ function DatasetTab({ fixtureTypes }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  const [uploadMessage, setUploadMessage] = useState(null);
 
   const handleUpload = async (files) => {
     if (!files || files.length === 0) return;
@@ -112,17 +119,14 @@ function DatasetTab({ fixtureTypes }) {
       const messages = [];
       for (const file of files) {
         const result = await uploadTrainingImage(file);
-        // Backend returns multiple image records for video files (one per extracted frame)
-        if (result && Array.isArray(result.images) && result.images.length > 1) {
-          messages.push(`${result.images.length} frames extraidos do video "${file.name}"`);
-        } else if (result && result.frames_extracted) {
-          messages.push(`${result.frames_extracted} frames extraidos do video "${file.name}"`);
+        if (result && result.frames_extracted) {
+          messages.push(`${result.frames_extracted} frames extraidos de "${file.name}"`);
+        } else {
+          messages.push(`"${file.name}" adicionado`);
         }
       }
-      if (messages.length > 0) {
-        setUploadMessage(messages.join('. '));
-        setTimeout(() => setUploadMessage(null), 6000);
-      }
+      setUploadMessage(messages.join('. '));
+      setTimeout(() => setUploadMessage(null), 6000);
       load();
     } catch (err) {
       setError(err.message);
@@ -131,35 +135,35 @@ function DatasetTab({ fixtureTypes }) {
     }
   };
 
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragOver(false);
-    handleUpload(e.dataTransfer.files);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    setDragOver(true);
-  };
-
-  const handleDelete = async (id) => {
-    if (!window.confirm('Excluir esta imagem e suas anotacoes?')) return;
+  const handleOpenGroup = async (sourceName) => {
+    if (openGroup === sourceName) { setOpenGroup(null); setFrames([]); return; }
+    setOpenGroup(sourceName);
+    setLoadingFrames(true);
     try {
-      await deleteTrainingImage(id);
+      const f = await fetchGroupFrames(sourceName);
+      setFrames(Array.isArray(f) ? f : []);
+    } catch (err) { setError(err.message); }
+    setLoadingFrames(false);
+  };
+
+  const handleAutoAnnotateGroup = async (sourceName) => {
+    setAutoAnnotatingGroup(sourceName);
+    try {
+      const result = await autoAnnotateGroup(sourceName);
+      setUploadMessage(`Auto-anotacao concluida: ${result.success_count}/${result.total_frames} frames anotados`);
+      setTimeout(() => setUploadMessage(null), 6000);
       load();
-    } catch (err) {
-      setError(err.message);
-    }
+      if (openGroup === sourceName) handleOpenGroup(sourceName); // refresh frames
+    } catch (err) { setError(err.message); }
+    setAutoAnnotatingGroup(null);
   };
 
   const handleAnnotate = async (image) => {
     try {
       const anns = await fetchImageAnnotations(image.image_id);
-      setAnnotatingData(anns.annotations || []);
+      setAnnotatingData(anns.annotations || anns || []);
       setAnnotatingImage(image);
-    } catch (err) {
-      setError(err.message);
-    }
+    } catch (err) { setError(err.message); }
   };
 
   const handleSaveAnnotations = async (annotations) => {
@@ -168,25 +172,16 @@ function DatasetTab({ fixtureTypes }) {
       setAnnotatingImage(null);
       setAnnotatingData(null);
       load();
-    } catch (err) {
-      setError(err.message);
-    }
+      if (openGroup) handleOpenGroup(openGroup);
+    } catch (err) { setError(err.message); }
   };
 
-  const handleAutoAnnotate = async (image) => {
-    setAutoAnnotatingIds(prev => new Set([...prev, image.image_id]));
+  const handleAutoAnnotateFrame = async (image) => {
     try {
       await autoAnnotate(image.image_id);
+      if (openGroup) handleOpenGroup(openGroup);
       load();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setAutoAnnotatingIds(prev => {
-        const next = new Set(prev);
-        next.delete(image.image_id);
-        return next;
-      });
-    }
+    } catch (err) { setError(err.message); }
   };
 
   const ftArray = fixtureTypes.map(ft => ({
@@ -202,18 +197,14 @@ function DatasetTab({ fixtureTypes }) {
         <div className="training-stats-bar">
           <div className="training-stat">
             <span className="training-stat-value">{stats.total_images || 0}</span>
-            <span className="training-stat-label">Imagens</span>
+            <span className="training-stat-label">Frames</span>
           </div>
           <div className="training-stat">
             <span className="training-stat-value">{stats.total_annotations || 0}</span>
             <span className="training-stat-label">Anotacoes</span>
           </div>
           {Object.entries(stats.annotations_by_type || stats.annotations_per_type || {}).map(([type, count]) => (
-            <span
-              key={type}
-              className="fixture-type-badge"
-              style={{ background: TYPE_COLORS[type] || '#888' }}
-            >
+            <span key={type} className="fixture-type-badge" style={{ background: TYPE_COLORS[type] || '#888' }}>
               {type}: {count}
             </span>
           ))}
@@ -221,7 +212,6 @@ function DatasetTab({ fixtureTypes }) {
       )}
 
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
-
       {uploadMessage && (
         <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}>
           <span style={{ color: '#166534' }}>{uploadMessage}</span>
@@ -229,69 +219,77 @@ function DatasetTab({ fixtureTypes }) {
       )}
 
       {/* Upload zone */}
-      <div
-        className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
+      <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
+        onDrop={e => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files); }}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
-        onClick={() => fileInputRef.current?.click()}
-      >
+        onClick={() => fileInputRef.current?.click()}>
         <div className="upload-icon">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4" stroke="#999" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </div>
-        <p>{uploading ? 'Enviando...' : 'Arraste imagens aqui ou clique para selecionar'}</p>
-        <p className="upload-hint">Formatos aceitos: JPG, PNG, WEBP</p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,video/*"
-          multiple
-          style={{ display: 'none' }}
-          onChange={e => handleUpload(e.target.files)}
-        />
+        <p>{uploading ? 'Extraindo frames...' : 'Arraste videos ou imagens aqui'}</p>
+        <p className="upload-hint">Videos: frames extraidos a 1/segundo | Imagens: adicionadas diretamente</p>
+        <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
+          onChange={e => handleUpload(e.target.files)} />
       </div>
 
-      {/* Image grid */}
+      {/* Source groups */}
       {loading ? (
-        <div className="empty-state">Carregando imagens...</div>
-      ) : images.length === 0 ? (
-        <div className="empty-state">Nenhuma imagem de treinamento. Faca upload para comecar.</div>
+        <div className="empty-state">Carregando...</div>
+      ) : groups.length === 0 ? (
+        <div className="empty-state">Nenhum dado de treinamento. Faca upload para comecar.</div>
       ) : (
-        <div className="training-image-grid">
-          {images.map(img => (
-            <div key={img.image_id} className="training-image-card">
-              <div className="training-image-thumb-area">
-                <img
-                  src={img.thumbnail_url || img.image_url}
-                  alt={img.filename}
-                  className="training-image-thumb"
-                />
-                {img.annotation_count > 0 && (
-                  <span className="training-image-ann-count">
-                    {img.annotation_count} anotacoes
-                  </span>
-                )}
-              </div>
-              <div className="training-image-card-body">
-                <div className="training-image-filename">{img.filename}</div>
-                <div className="training-image-actions">
-                  <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(img)}>
-                    Anotar
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {groups.map(g => (
+            <div key={g.source_name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              {/* Group header */}
+              <div className="training-group-header" onClick={() => handleOpenGroup(g.source_name)}>
+                <img src={g.thumbnail_url} alt="" className="training-group-thumb" />
+                <div className="training-group-info">
+                  <div className="training-group-name">{g.source_name}</div>
+                  <div className="training-group-meta">
+                    {g.frame_count} frame{g.frame_count !== 1 ? 's' : ''} | {g.total_annotations || 0} anotacoes
+                  </div>
+                </div>
+                <div className="training-group-actions" onClick={e => e.stopPropagation()}>
+                  <button className="btn btn-sm btn-primary" onClick={() => handleOpenGroup(g.source_name)}>
+                    {openGroup === g.source_name ? 'Fechar' : 'Anotar'}
                   </button>
-                  <button
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => handleAutoAnnotate(img)}
-                    disabled={autoAnnotatingIds.has(img.image_id)}
-                  >
-                    {autoAnnotatingIds.has(img.image_id) ? 'Anotando...' : 'Auto-anotar com IA'}
-                  </button>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(img.image_id)}>
-                    Excluir
+                  <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
+                    onClick={() => handleAutoAnnotateGroup(g.source_name)}>
+                    {autoAnnotatingGroup === g.source_name ? 'Anotando todos...' : 'Auto-anotar com IA'}
                   </button>
                 </div>
               </div>
+
+              {/* Frame browser (expanded) */}
+              {openGroup === g.source_name && (
+                <div className="training-frames-panel">
+                  {loadingFrames ? (
+                    <div className="empty-state">Carregando frames...</div>
+                  ) : (
+                    <div className="training-frame-grid">
+                      {frames.map(fr => (
+                        <div key={fr.image_id} className="training-frame-card">
+                          <img src={fr.thumbnail_url} alt={fr.filename} className="training-frame-thumb" loading="lazy" />
+                          <div className="training-frame-info">
+                            <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
+                            {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
+                              <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
+                            )}
+                          </div>
+                          <div className="training-frame-actions">
+                            <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
+                            <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

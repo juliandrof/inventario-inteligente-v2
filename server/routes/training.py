@@ -219,9 +219,9 @@ async def upload_training_image(file: UploadFile = File(...)):
 
                     image_id = int(time.time() * 1000) + seconds
                     execute_update("""
-                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, uploaded_at)
-                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, NOW())
-                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame})
+                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
+                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
+                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename})
 
                     created_records.append({
                         "image_id": image_id,
@@ -268,9 +268,9 @@ async def upload_training_image(file: UploadFile = File(...)):
 
     image_id = int(time.time() * 1000)
     execute_update("""
-        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, uploaded_at)
-        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, NOW())
-    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height})
+        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
+        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
+    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height, "sg": filename})
 
     return {
         "image_id": image_id,
@@ -278,6 +278,70 @@ async def upload_training_image(file: UploadFile = File(...)):
         "volume_path": volume_path,
         "width": width,
         "height": height,
+    }
+
+
+@router.get("/groups")
+async def list_training_groups():
+    """List training sources grouped (1 entry per video/image upload)."""
+    groups = execute_query("""
+        SELECT COALESCE(source_group, filename) as source_name,
+            COUNT(*) as frame_count,
+            SUM(COALESCE(annotation_count, 0)) as total_annotations,
+            MIN(image_id) as first_image_id,
+            MIN(uploaded_at) as uploaded_at
+        FROM training_images
+        GROUP BY COALESCE(source_group, filename)
+        ORDER BY MIN(uploaded_at) DESC
+    """)
+    for g in groups:
+        g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
+    return groups
+
+
+@router.get("/groups/{source_name}/frames")
+async def list_group_frames(source_name: str):
+    """List all frames for a source group (video or single image)."""
+    images = execute_query("""
+        SELECT ti.*,
+            (SELECT COUNT(*) FROM training_annotations ta WHERE ta.image_id = ti.image_id) as actual_annotation_count
+        FROM training_images ti
+        WHERE COALESCE(ti.source_group, ti.filename) = %(sg)s
+        ORDER BY ti.filename
+    """, {"sg": source_name})
+    for img in images:
+        img["image_url"] = f"/api/training/images/{img['image_id']}/stream"
+        img["thumbnail_url"] = img["image_url"]
+    return images
+
+
+@router.post("/groups/{source_name}/auto-annotate-all")
+async def auto_annotate_group(source_name: str):
+    """Auto-annotate all frames in a source group."""
+    images = execute_query("""
+        SELECT image_id FROM training_images
+        WHERE COALESCE(source_group, filename) = %(sg)s
+        ORDER BY filename
+    """, {"sg": source_name})
+    if not images:
+        raise HTTPException(404, "Group not found")
+
+    results = []
+    for img in images:
+        try:
+            # Reuse the single-image auto-annotate logic
+            from starlette.testclient import TestClient
+            # Call the auto_annotate_image function directly
+            result = await auto_annotate_image(img["image_id"])
+            results.append({"image_id": img["image_id"], "status": "ok", "annotations": result.get("annotations_created", 0)})
+        except Exception as e:
+            results.append({"image_id": img["image_id"], "status": "error", "error": str(e)[:200]})
+
+    return {
+        "source_name": source_name,
+        "total_frames": len(images),
+        "results": results,
+        "success_count": sum(1 for r in results if r["status"] == "ok"),
     }
 
 

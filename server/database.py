@@ -217,6 +217,12 @@ def _create_training_tables(conn):
         except Exception as e:
             logger.warning(f"Training table [{label}]: {e}")
 
+    # Ensure source_group column exists
+    try:
+        cur.execute("ALTER TABLE training_images ADD COLUMN IF NOT EXISTS source_group VARCHAR(500)")
+    except Exception as e:
+        logger.warning(f"ALTER source_group: {e}")
+
     # Ensure detection_mode config
     try:
         cur.execute("SELECT 1 FROM configurations WHERE config_key = 'detection_mode'")

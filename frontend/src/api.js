@@ -85,7 +85,12 @@ export const uploadLogo = async (file) => {
   return res.json();
 };
 
-// Training
+// Training - Groups (video/image sources)
+export const fetchTrainingGroups = () => request('/training/groups');
+export const fetchGroupFrames = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/frames`);
+export const autoAnnotateGroup = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/auto-annotate-all`, { method: 'POST' });
+
+// Training - Images
 export const fetchTrainingImages = () => request('/training/images');
 export const uploadTrainingImage = async (file) => {
   const formData = new FormData();
