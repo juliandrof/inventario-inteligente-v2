@@ -354,16 +354,49 @@ async def auto_annotate_image(image_id: int):
     if not rows:
         raise HTTPException(404, "Image not found")
 
-    # Download image from Volume
+    # Download file from Volume
     try:
         w = get_workspace_client()
         resp = w.files.download(rows[0]["volume_path"])
-        image_bytes = resp.contents.read()
+        file_bytes = resp.contents.read()
     except Exception as e:
         raise HTTPException(500, f"Failed to download image: {e}")
 
-    # Convert to base64
-    frame_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    # Handle video files - extract first frame
+    import io
+    from PIL import Image as PILImage
+    volume_path = rows[0]["volume_path"]
+    ext = volume_path.rsplit(".", 1)[-1].lower() if "." in volume_path else ""
+    video_exts = {"mp4", "avi", "mov", "mkv", "webm", "m4v", "mpg", "mpeg", "wmv", "flv", "3gp", "ts"}
+
+    if ext in video_exts:
+        import cv2
+        tmp_path = f"/tmp/auto_ann_{image_id}.{ext}"
+        with open(tmp_path, "wb") as f:
+            f.write(file_bytes)
+        cap = cv2.VideoCapture(tmp_path)
+        ret, frame = cap.read()
+        cap.release()
+        os.remove(tmp_path)
+        if not ret:
+            raise HTTPException(500, "Could not extract frame from video")
+        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        file_bytes = jpeg.tobytes()
+
+    # Resize if too large (max 1024px wide) and convert to JPEG
+    try:
+        img = PILImage.open(io.BytesIO(file_bytes)).convert("RGB")
+        orig_w, orig_h = img.size
+        if orig_w > 1024:
+            ratio = 1024 / orig_w
+            img = img.resize((1024, int(orig_h * ratio)))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=80)
+        file_bytes = buf.getvalue()
+    except Exception as e:
+        logger.warning(f"Could not resize image: {e}")
+
+    frame_b64 = base64.b64encode(file_bytes).decode("utf-8")
 
     # Call FMAPI
     from server.fmapi import analyze_frame_fixtures
