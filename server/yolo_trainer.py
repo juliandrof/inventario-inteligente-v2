@@ -279,19 +279,39 @@ def submit_training_job(
     script_path = f"/Volumes/{CATALOG}/{SCHEMA}/training_scripts/train_{int(time.time() * 1000)}.py"
     w.files.upload(script_path, io.BytesIO(script.encode("utf-8")), overwrite=True)
 
-    # Submit as a one-time run
-    run = w.jobs.submit(
-        run_name=f"YOLO Training {int(time.time())}",
-        tasks=[
-            {
-                "task_key": "yolo_train",
-                "new_cluster": cluster_spec,
-                "spark_python_task": {
-                    "python_file": script_path,
-                },
-            }
-        ],
-    )
+    # Submit as a one-time run via REST API (SDK submit has compatibility issues)
+    import json
+    import urllib.request
+    import ssl
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
 
-    logger.info(f"Submitted Databricks training job, run_id={run.run_id}")
-    return run.run_id
+    host = w.config.host.rstrip("/")
+    headers = w.config.authenticate()
+    token = headers.get("Authorization", "").replace("Bearer ", "") if headers else ""
+
+    payload = json.dumps({
+        "run_name": f"YOLO Training {int(time.time())}",
+        "tasks": [{
+            "task_key": "yolo_train",
+            "new_cluster": cluster_spec,
+            "spark_python_task": {
+                "python_file": script_path,
+            },
+        }],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{host}/api/2.1/jobs/runs/submit",
+        data=payload,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+        run_id = result.get("run_id")
+
+    logger.info(f"Submitted Databricks training job, run_id={run_id}")
+    return run_id
