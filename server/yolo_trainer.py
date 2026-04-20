@@ -142,23 +142,41 @@ import os
 import shutil
 
 # Install dependencies
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow", "pyyaml"])
 
 from ultralytics import YOLO
 import mlflow
 
 # Configuration
-DATASET_PATH = "{dataset_path}"
+VOLUME_DATASET = "{dataset_path}"
 MODEL_SIZE = "{model_size}"
 EPOCHS = {epochs}
 BATCH_SIZE = {batch_size}
 VOLUME_RESULTS_PATH = "{results_path}"
+LOCAL_DATASET = "/tmp/yolo_dataset"
 LOCAL_RESULTS = "/tmp/yolo_results"
-DATA_YAML = f"{{DATASET_PATH}}/data.yaml"
 
 print(f"Starting YOLO training: model=yolov8{{MODEL_SIZE}}, epochs={{EPOCHS}}, batch={{BATCH_SIZE}}")
-print(f"Dataset: {{DATA_YAML}}")
-print(f"Local results: {{LOCAL_RESULTS}}")
+print(f"Volume dataset: {{VOLUME_DATASET}}")
+
+# Copy dataset from Volume to local /tmp (Volumes not readable by YOLO on GPU clusters)
+print("Copying dataset to local disk...")
+if os.path.exists(LOCAL_DATASET):
+    shutil.rmtree(LOCAL_DATASET)
+shutil.copytree(VOLUME_DATASET, LOCAL_DATASET)
+
+# Fix data.yaml paths to use local copy
+import yaml
+data_yaml_path = os.path.join(LOCAL_DATASET, "data.yaml")
+with open(data_yaml_path, "r") as f:
+    data_cfg = yaml.safe_load(f)
+data_cfg["train"] = os.path.join(LOCAL_DATASET, "images", "train")
+data_cfg["val"] = os.path.join(LOCAL_DATASET, "images", "val")
+with open(data_yaml_path, "w") as f:
+    yaml.dump(data_cfg, f)
+
+DATA_YAML = data_yaml_path
+print(f"Dataset copied to: {{LOCAL_DATASET}}")
 
 # Set up MLflow
 mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
