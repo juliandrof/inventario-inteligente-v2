@@ -3,7 +3,7 @@ import {
   fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus,
   fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
-  startTrainingJob, fetchTrainingJobs, fetchJobDetail,
+  startTrainingJob, fetchTrainingJobs, fetchJobDetail, pollJobStatus,
   fetchTrainedModels, activateModel, deleteModel,
   fetchDetectionMode, setDetectionMode, fetchTrainingStats,
   fetchConfigFixtureTypes,
@@ -28,6 +28,7 @@ const JOB_STATUS_COLORS = {
   RUNNING: '#F59E0B',
   COMPLETED: '#10B981',
   FAILED: '#EF4444',
+  CANCELLED: '#9CA3AF',
 };
 
 const JOB_STATUS_LABELS = {
@@ -35,6 +36,7 @@ const JOB_STATUS_LABELS = {
   RUNNING: 'Em execucao',
   COMPLETED: 'Concluido',
   FAILED: 'Falhou',
+  CANCELLED: 'Cancelado',
 };
 
 function Training() {
@@ -352,7 +354,16 @@ function TrainingTab() {
   const loadJobs = useCallback(() => {
     setLoading(true);
     fetchTrainingJobs()
-      .then(resp => setJobs(resp.jobs || resp || []))
+      .then(resp => {
+        const jobList = resp.jobs || resp || [];
+        setJobs(jobList);
+        // Explicitly poll status for RUNNING/PENDING jobs to trigger backend sync
+        jobList.forEach(job => {
+          if ((job.status === 'RUNNING' || job.status === 'PENDING') && job.job_id) {
+            pollJobStatus(job.job_id).catch(() => {});
+          }
+        });
+      })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -542,6 +553,13 @@ function TrainingTab() {
 
                 {isExpanded && (
                   <div className="training-job-details">
+                    {/* Timestamps */}
+                    <div style={{ padding: '8px 12px', fontSize: 13, color: '#6B7280', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      {job.started_at && <span>Inicio: {new Date(job.started_at).toLocaleString('pt-BR')}</span>}
+                      {job.completed_at && <span>Fim: {new Date(job.completed_at).toLocaleString('pt-BR')}</span>}
+                      {job.databricks_run_id && <span>Run ID: {job.databricks_run_id}</span>}
+                    </div>
+
                     {job.status === 'COMPLETED' && (() => {
                       const parsedMetrics = (() => {
                         try {
@@ -579,6 +597,12 @@ function TrainingTab() {
                       );
                     })()}
 
+                    {job.status === 'PENDING' && (
+                      <div style={{ padding: 12, color: '#6B7280' }}>
+                        Aguardando inicio do cluster Databricks...
+                      </div>
+                    )}
+
                     {job.status === 'RUNNING' && (
                       <div className="training-job-progress" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12 }}>
                         <div className="training-progress-bar-track">
@@ -598,8 +622,13 @@ function TrainingTab() {
                       </div>
                     )}
 
-                    {job.status === 'FAILED' && job.error_message && (
-                      <div className="error-text" style={{ padding: 12 }}>{job.error_message}</div>
+                    {job.status === 'FAILED' && (
+                      <div style={{ padding: 12, background: '#FEF2F2', borderRadius: 8, margin: '8px 12px' }}>
+                        <div style={{ fontWeight: 600, color: '#991B1B', marginBottom: 4 }}>Falha no treinamento</div>
+                        <div className="error-text" style={{ fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {job.error_message || 'Erro desconhecido. Verifique os logs do Databricks.'}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}

@@ -1,6 +1,7 @@
 """Training routes - YOLO model training, image annotation, and model management."""
 
 import base64
+import datetime
 import json
 import logging
 import os
@@ -757,12 +758,42 @@ async def start_training_job(payload: StartJobPayload):
 
 @router.get("/jobs")
 async def list_training_jobs(limit: int = Query(20), offset: int = Query(0)):
-    """List training jobs with status."""
+    """List training jobs with status.
+
+    Automatically syncs status of RUNNING/PENDING jobs with Databricks.
+    """
     jobs = execute_query("""
         SELECT * FROM training_jobs
         ORDER BY started_at DESC
         LIMIT %(limit)s OFFSET %(offset)s
     """, {"limit": limit, "offset": offset})
+
+    # Auto-sync RUNNING/PENDING jobs with Databricks
+    for job in jobs:
+        if job.get("status") in ("RUNNING", "PENDING") and job.get("databricks_run_id"):
+            try:
+                _sync_job_status(job["job_id"], job["databricks_run_id"])
+            except Exception as e:
+                logger.warning(f"Auto-sync failed for job {job['job_id']}: {e}")
+
+    # Re-fetch after sync to get updated statuses
+    jobs = execute_query("""
+        SELECT * FROM training_jobs
+        ORDER BY started_at DESC
+        LIMIT %(limit)s OFFSET %(offset)s
+    """, {"limit": limit, "offset": offset})
+
+    # Compute duration_seconds for each job
+    for job in jobs:
+        if job.get("started_at"):
+            end = job.get("completed_at") or datetime.datetime.now()
+            try:
+                delta = end - job["started_at"]
+                job["duration_seconds"] = delta.total_seconds()
+            except Exception:
+                job["duration_seconds"] = None
+        else:
+            job["duration_seconds"] = None
 
     total = execute_query("SELECT COUNT(*) as cnt FROM training_jobs")
     return {"jobs": jobs, "total": total[0]["cnt"] if total else 0}
@@ -777,6 +808,18 @@ async def get_training_job(job_id: int):
     )
     if not rows:
         raise HTTPException(404, "Training job not found")
+
+    # Auto-sync if still running
+    job_row = rows[0]
+    if job_row.get("status") in ("RUNNING", "PENDING") and job_row.get("databricks_run_id"):
+        try:
+            _sync_job_status(job_row["job_id"], job_row["databricks_run_id"])
+            rows = execute_query(
+                "SELECT * FROM training_jobs WHERE job_id = %(jid)s",
+                {"jid": job_id},
+            )
+        except Exception as e:
+            logger.warning(f"Auto-sync failed for job {job_id}: {e}")
 
     job = dict(rows[0])
 
@@ -799,9 +842,105 @@ async def get_training_job(job_id: int):
     return job
 
 
+def _sync_job_status(job_id: int, databricks_run_id: int) -> str:
+    """Sync a single job's status with Databricks via REST API.
+
+    Returns the new status string.
+    """
+    from server.yolo_trainer import get_run_status, parse_training_results, MODELS_VOLUME
+
+    w = get_workspace_client()
+    run_info = get_run_status(w, databricks_run_id)
+
+    life_cycle = run_info.get("life_cycle_state", "UNKNOWN")
+    result_state = run_info.get("result_state")
+    state_message = run_info.get("state_message", "")
+    termination_message = run_info.get("termination_message", "")
+
+    # Pick the most informative error message
+    error_detail = termination_message or state_message or ""
+
+    # Fetch job info for model naming
+    job_rows = execute_query(
+        "SELECT model_size, epochs, batch_size FROM training_jobs WHERE job_id = %(jid)s",
+        {"jid": job_id},
+    )
+    job_info = job_rows[0] if job_rows else {}
+
+    new_status = None
+
+    if life_cycle == "TERMINATED":
+        if result_state == "SUCCESS":
+            new_status = "COMPLETED"
+            # Try to parse training metrics
+            try:
+                metrics = parse_training_results(f"{MODELS_VOLUME}/results_{databricks_run_id}")
+                metrics_json = json.dumps(metrics)
+                execute_update("""
+                    UPDATE training_jobs
+                    SET status = 'COMPLETED', completed_at = NOW(), metrics_json = %(mj)s
+                    WHERE job_id = %(jid)s
+                """, {"mj": metrics_json, "jid": job_id})
+
+                # Create trained model record
+                if metrics.get("best_model_path"):
+                    model_id = int(time.time() * 1000)
+                    execute_update("""
+                        INSERT INTO trained_models
+                        (model_id, job_id, model_name, model_path, map50, map50_95,
+                         precision_val, recall_val, is_active, created_at)
+                        VALUES (%(mid)s, %(jid)s, %(mn)s, %(mp)s, %(m50)s, %(m5095)s,
+                                %(prec)s, %(rec)s, FALSE, NOW())
+                    """, {
+                        "mid": model_id,
+                        "jid": job_id,
+                        "mn": f"yolov8{job_info.get('model_size', '?')}_e{job_info.get('epochs', '?')}",
+                        "mp": metrics.get("best_model_path", ""),
+                        "m50": metrics.get("map50", 0),
+                        "m5095": metrics.get("map50_95", 0),
+                        "prec": metrics.get("precision", 0),
+                        "rec": metrics.get("recall", 0),
+                    })
+            except Exception as e:
+                logger.warning(f"Could not parse metrics for job {job_id}: {e}")
+                execute_update("""
+                    UPDATE training_jobs SET status = 'COMPLETED', completed_at = NOW()
+                    WHERE job_id = %(jid)s
+                """, {"jid": job_id})
+        else:
+            new_status = "FAILED"
+            error_msg = error_detail or result_state or "Job terminated with unknown error"
+            execute_update("""
+                UPDATE training_jobs
+                SET status = 'FAILED', completed_at = NOW(), error_message = %(err)s
+                WHERE job_id = %(jid)s
+            """, {"err": error_msg[:2000], "jid": job_id})
+
+    elif life_cycle in ("INTERNAL_ERROR", "SKIPPED"):
+        new_status = "FAILED"
+        error_msg = error_detail or f"Databricks {life_cycle}"
+        execute_update("""
+            UPDATE training_jobs
+            SET status = 'FAILED', completed_at = NOW(), error_message = %(err)s
+            WHERE job_id = %(jid)s
+        """, {"err": error_msg[:2000], "jid": job_id})
+
+    elif life_cycle in ("PENDING", "RUNNING", "BLOCKED", "QUEUED"):
+        new_status = "RUNNING"
+
+    else:
+        new_status = "RUNNING"  # Unknown state, keep as running
+
+    logger.info(f"Job {job_id} (run {databricks_run_id}): lifecycle={life_cycle}, result={result_state}, new_status={new_status}")
+    return new_status
+
+
 @router.get("/jobs/{job_id}/status")
 async def poll_job_status(job_id: int):
-    """Poll Databricks job status and update DB."""
+    """Poll Databricks job status and update DB.
+
+    Uses REST API (not SDK) to query Databricks run status.
+    """
     rows = execute_query(
         "SELECT * FROM training_jobs WHERE job_id = %(jid)s",
         {"jid": job_id},
@@ -820,85 +959,24 @@ async def poll_job_status(job_id: int):
         return {"job_id": job_id, "status": job["status"]}
 
     try:
-        w = get_workspace_client()
-        run = w.jobs.get_run(dbx_run_id)
-        life_cycle = run.state.life_cycle_state.value if run.state and run.state.life_cycle_state else "UNKNOWN"
-        result_state = run.state.result_state.value if run.state and run.state.result_state else None
+        new_status = _sync_job_status(job_id, dbx_run_id)
 
-        # Map Databricks states to our states
-        if life_cycle in ("TERMINATED",):
-            if result_state == "SUCCESS":
-                new_status = "COMPLETED"
-
-                # Try to parse metrics
-                from server.yolo_trainer import parse_training_results, MODELS_VOLUME
-                try:
-                    # Reconstruct results path from job info
-                    metrics = parse_training_results(f"{MODELS_VOLUME}/results_{dbx_run_id}")
-                    metrics_json = json.dumps(metrics)
-                    execute_update("""
-                        UPDATE training_jobs
-                        SET status = 'COMPLETED', completed_at = NOW(), metrics_json = %(mj)s
-                        WHERE job_id = %(jid)s
-                    """, {"mj": metrics_json, "jid": job_id})
-
-                    # Create trained model record
-                    if metrics.get("best_model_path"):
-                        model_id = int(time.time() * 1000)
-                        execute_update("""
-                            INSERT INTO trained_models
-                            (model_id, job_id, model_name, model_path, map50, map50_95,
-                             precision_val, recall_val, is_active, created_at)
-                            VALUES (%(mid)s, %(jid)s, %(mn)s, %(mp)s, %(m50)s, %(m5095)s,
-                                    %(prec)s, %(rec)s, FALSE, NOW())
-                        """, {
-                            "mid": model_id,
-                            "jid": job_id,
-                            "mn": f"yolov8{job['model_size']}_e{job['epochs']}",
-                            "mp": metrics.get("best_model_path", ""),
-                            "m50": metrics.get("map50", 0),
-                            "m5095": metrics.get("map50_95", 0),
-                            "prec": metrics.get("precision", 0),
-                            "rec": metrics.get("recall", 0),
-                        })
-                except Exception as e:
-                    logger.warning(f"Could not parse metrics for job {job_id}: {e}")
-                    execute_update("""
-                        UPDATE training_jobs SET status = 'COMPLETED', completed_at = NOW()
-                        WHERE job_id = %(jid)s
-                    """, {"jid": job_id})
-            else:
-                new_status = "FAILED"
-                error_msg = result_state or "Unknown error"
-                execute_update("""
-                    UPDATE training_jobs
-                    SET status = 'FAILED', completed_at = NOW(), error_message = %(err)s
-                    WHERE job_id = %(jid)s
-                """, {"err": error_msg, "jid": job_id})
-
-        elif life_cycle in ("INTERNAL_ERROR", "SKIPPED"):
-            new_status = "FAILED"
-            execute_update("""
-                UPDATE training_jobs
-                SET status = 'FAILED', completed_at = NOW(), error_message = %(err)s
-                WHERE job_id = %(jid)s
-            """, {"err": life_cycle, "jid": job_id})
-
-        elif life_cycle in ("PENDING", "RUNNING", "BLOCKED"):
-            new_status = "RUNNING"
-        else:
-            new_status = job["status"]
+        # Re-fetch updated job
+        updated = execute_query(
+            "SELECT * FROM training_jobs WHERE job_id = %(jid)s",
+            {"jid": job_id},
+        )
+        updated_job = updated[0] if updated else job
 
         return {
             "job_id": job_id,
             "databricks_run_id": dbx_run_id,
             "status": new_status,
-            "life_cycle_state": life_cycle,
-            "result_state": result_state,
+            "error_message": updated_job.get("error_message"),
         }
 
     except Exception as e:
-        logger.error(f"Failed to poll job status: {e}")
+        logger.error(f"Failed to poll job status for {job_id}: {e}")
         return {
             "job_id": job_id,
             "status": job["status"],

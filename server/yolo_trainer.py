@@ -251,6 +251,73 @@ def parse_training_results(results_path: str) -> dict:
         return {}
 
 
+def _get_auth_headers(w) -> tuple[str, str]:
+    """Get host and Bearer token from workspace client for REST API calls."""
+    host = w.config.host.rstrip("/")
+    headers = w.config.authenticate()
+    token = headers.get("Authorization", "").replace("Bearer ", "") if headers else ""
+    return host, token
+
+
+def _databricks_rest_get(w, path: str) -> dict:
+    """Make an authenticated GET request to Databricks REST API."""
+    import json as _json
+    import urllib.request
+    import ssl
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+    host, token = _get_auth_headers(w)
+    req = urllib.request.Request(
+        f"{host}{path}",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return _json.loads(resp.read())
+
+
+def _databricks_rest_post(w, path: str, payload: dict) -> dict:
+    """Make an authenticated POST request to Databricks REST API."""
+    import json as _json
+    import urllib.request
+    import ssl
+    try:
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except Exception:
+        pass
+
+    host, token = _get_auth_headers(w)
+    data = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{host}{path}",
+        data=data,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return _json.loads(resp.read())
+
+
+def get_run_status(w, run_id: int) -> dict:
+    """Get the status of a Databricks job run via REST API.
+
+    Returns dict with keys: life_cycle_state, result_state, state_message.
+    """
+    result = _databricks_rest_get(w, f"/api/2.1/jobs/runs/get?run_id={run_id}")
+    state = result.get("state", {})
+    status = result.get("status", {})
+    return {
+        "life_cycle_state": state.get("life_cycle_state", "UNKNOWN"),
+        "result_state": state.get("result_state"),
+        "state_message": state.get("state_message", ""),
+        "termination_code": status.get("termination_details", {}).get("code", ""),
+        "termination_message": status.get("termination_details", {}).get("message", ""),
+    }
+
+
 def submit_training_job(
     w,
     script: str,
@@ -258,10 +325,11 @@ def submit_training_job(
 ) -> int:
     """Submit a Databricks Job using workspace client.
 
+    Uploads the training script to /Workspace/Shared/ (more reliable than
+    Volumes for spark_python_task) and submits a one-time run via REST API.
+
     Returns the Databricks run_id.
     """
-    import base64
-
     # Default cluster spec with GPU for YOLO training
     if cluster_spec is None:
         cluster_spec = {
@@ -271,16 +339,15 @@ def submit_training_job(
             "driver_node_type_id": "g5.xlarge",
         }
 
-    # Encode script as base64 for the notebook task
-    script_b64 = base64.b64encode(script.encode("utf-8")).decode("utf-8")
-
-    # Upload script to a Volume
+    # Upload script to Workspace filesystem (more reliable for spark_python_task
+    # than Volumes - avoids "Cannot read the python file" errors)
     import io
-    script_path = f"/Volumes/{CATALOG}/{SCHEMA}/training_scripts/train_{int(time.time() * 1000)}.py"
-    w.files.upload(script_path, io.BytesIO(script.encode("utf-8")), overwrite=True)
+    script_ts = int(time.time() * 1000)
+    workspace_script_dir = "/Workspace/Shared/inventario-inteligente/training_scripts"
+    script_path = f"{workspace_script_dir}/train_{script_ts}.py"
 
-    # Submit as a one-time run via REST API (SDK submit has compatibility issues)
-    import json
+    # Ensure directory exists and upload via workspace API
+    import json as _json
     import urllib.request
     import ssl
     try:
@@ -288,11 +355,53 @@ def submit_training_job(
     except Exception:
         pass
 
-    host = w.config.host.rstrip("/")
-    headers = w.config.authenticate()
-    token = headers.get("Authorization", "").replace("Bearer ", "") if headers else ""
+    host, token = _get_auth_headers(w)
+    auth_header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    payload = json.dumps({
+    # Create directory (mkdirs)
+    mkdirs_payload = _json.dumps({"path": workspace_script_dir}).encode("utf-8")
+    mkdirs_req = urllib.request.Request(
+        f"{host}/api/2.0/workspace/mkdirs",
+        data=mkdirs_payload,
+        headers=auth_header,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(mkdirs_req, timeout=15) as resp:
+            resp.read()
+    except Exception as e:
+        logger.warning(f"mkdirs warning (may already exist): {e}")
+
+    # Upload script via workspace import API
+    import base64
+    script_b64 = base64.b64encode(script.encode("utf-8")).decode("utf-8")
+    import_payload = _json.dumps({
+        "path": script_path,
+        "content": script_b64,
+        "language": "PYTHON",
+        "overwrite": True,
+        "format": "SOURCE",
+    }).encode("utf-8")
+    import_req = urllib.request.Request(
+        f"{host}/api/2.0/workspace/import",
+        data=import_payload,
+        headers=auth_header,
+        method="POST",
+    )
+    with urllib.request.urlopen(import_req, timeout=30) as resp:
+        resp.read()
+
+    logger.info(f"Uploaded training script to {script_path}")
+
+    # Also keep a backup copy in the Volume for reference
+    try:
+        volume_script_path = f"/Volumes/{CATALOG}/{SCHEMA}/training_scripts/train_{script_ts}.py"
+        w.files.upload(volume_script_path, io.BytesIO(script.encode("utf-8")), overwrite=True)
+    except Exception as e:
+        logger.warning(f"Could not save backup to Volume: {e}")
+
+    # Submit as a one-time run via REST API
+    result = _databricks_rest_post(w, "/api/2.1/jobs/runs/submit", {
         "run_name": f"YOLO Training {int(time.time())}",
         "tasks": [{
             "task_key": "yolo_train",
@@ -301,17 +410,8 @@ def submit_training_job(
                 "python_file": script_path,
             },
         }],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"{host}/api/2.1/jobs/runs/submit",
-        data=payload,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
-        run_id = result.get("run_id")
+    })
+    run_id = result.get("run_id")
 
     logger.info(f"Submitted Databricks training job, run_id={run_id}")
     return run_id
