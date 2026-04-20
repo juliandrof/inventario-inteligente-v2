@@ -559,8 +559,8 @@ function TrainingTab() {
   const [jobDetails, setJobDetails] = useState({});
   const [tooltipKey, setTooltipKey] = useState(null);
 
-  const loadJobs = useCallback(() => {
-    setLoading(true);
+  const loadJobs = useCallback((showLoading) => {
+    if (showLoading) setLoading(true);
     fetchTrainingJobs()
       .then(resp => setJobs(resp.jobs || resp || []))
       .catch(err => setError(err.message))
@@ -568,14 +568,16 @@ function TrainingTab() {
   }, []);
 
   useEffect(() => {
-    loadJobs();
-    // Poll only while there are active jobs, at a reasonable interval
-    const interval = setInterval(() => {
-      const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
-      if (hasActive) loadJobs();
-    }, 15000);
+    loadJobs(true); // show spinner on first load only
+  }, [loadJobs]);
+
+  // Silent poll for active jobs
+  useEffect(() => {
+    const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
+    if (!hasActive) return;
+    const interval = setInterval(() => loadJobs(false), 15000);
     return () => clearInterval(interval);
-  }, [loadJobs, jobs]);
+  }, [jobs, loadJobs]);
 
   const handleStart = async () => {
     setStarting(true);
@@ -583,7 +585,7 @@ function TrainingTab() {
     try {
       await startTrainingJob({ model_size: modelSize, epochs, batch_size: batchSize });
       setShowConfig(false);
-      loadJobs();
+      loadJobs(false);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -610,7 +612,7 @@ function TrainingTab() {
   const handlePublish = async (jobId) => {
     try {
       await activateModel(jobId);
-      loadJobs();
+      loadJobs(false);
     } catch (err) {
       setError(err.message);
     }

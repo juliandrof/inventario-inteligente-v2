@@ -339,14 +339,9 @@ def submit_training_job(
             "driver_node_type_id": "g5.xlarge",
         }
 
-    # Upload script to Workspace filesystem (more reliable for spark_python_task
-    # than Volumes - avoids "Cannot read the python file" errors)
+    # Upload script to DBFS (the only reliable path for spark_python_task)
     import io
-    script_ts = int(time.time() * 1000)
-    workspace_script_dir = "/Workspace/Shared/inventario-inteligente/training_scripts"
-    script_path = f"{workspace_script_dir}/train_{script_ts}.py"
-
-    # Ensure directory exists and upload via workspace API
+    import base64
     import json as _json
     import urllib.request
     import ssl
@@ -355,50 +350,29 @@ def submit_training_job(
     except Exception:
         pass
 
+    script_ts = int(time.time() * 1000)
+    dbfs_path = f"dbfs:/inventario-inteligente/training_scripts/train_{script_ts}.py"
+    script_path = dbfs_path  # for spark_python_task
+
     host, token = _get_auth_headers(w)
-    auth_header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # Create directory (mkdirs)
-    mkdirs_payload = _json.dumps({"path": workspace_script_dir}).encode("utf-8")
-    mkdirs_req = urllib.request.Request(
-        f"{host}/api/2.0/workspace/mkdirs",
-        data=mkdirs_payload,
-        headers=auth_header,
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(mkdirs_req, timeout=15) as resp:
-            resp.read()
-    except Exception as e:
-        logger.warning(f"mkdirs warning (may already exist): {e}")
-
-    # Upload script via workspace import API
-    import base64
+    # Upload to DBFS via REST API (handles files up to 1MB inline)
     script_b64 = base64.b64encode(script.encode("utf-8")).decode("utf-8")
-    import_payload = _json.dumps({
-        "path": script_path,
-        "content": script_b64,
-        "language": "PYTHON",
+    put_payload = _json.dumps({
+        "path": dbfs_path.replace("dbfs:", ""),
+        "contents": script_b64,
         "overwrite": True,
-        "format": "SOURCE",
     }).encode("utf-8")
-    import_req = urllib.request.Request(
-        f"{host}/api/2.0/workspace/import",
-        data=import_payload,
-        headers=auth_header,
+    put_req = urllib.request.Request(
+        f"{host}/api/2.0/dbfs/put",
+        data=put_payload,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(import_req, timeout=30) as resp:
+    with urllib.request.urlopen(put_req, timeout=30) as resp:
         resp.read()
 
     logger.info(f"Uploaded training script to {script_path}")
-
-    # Also keep a backup copy in the Volume for reference
-    try:
-        volume_script_path = f"/Volumes/{CATALOG}/{SCHEMA}/training_scripts/train_{script_ts}.py"
-        w.files.upload(volume_script_path, io.BytesIO(script.encode("utf-8")), overwrite=True)
-    except Exception as e:
-        logger.warning(f"Could not save backup to Volume: {e}")
 
     # Submit as a one-time run via REST API
     result = _databricks_rest_post(w, "/api/2.1/jobs/runs/submit", {
