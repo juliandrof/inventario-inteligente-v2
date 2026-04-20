@@ -91,6 +91,8 @@ function DatasetTab({ fixtureTypes }) {
   const [frames, setFrames] = useState([]);
   const [loadingFrames, setLoadingFrames] = useState(false);
   const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
+  const [selectedFrames, setSelectedFrames] = useState(new Set());
+  const [selectMode, setSelectMode] = useState(false);
 
   // Annotation editor state
   const [annotatingImage, setAnnotatingImage] = useState(null);
@@ -173,6 +175,40 @@ function DatasetTab({ fixtureTypes }) {
       setError(err.message);
       setAutoAnnotatingGroup(null);
     }
+  };
+
+  const toggleFrame = (id) => {
+    setSelectedFrames(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedFrames.size === frames.length) {
+      setSelectedFrames(new Set());
+    } else {
+      setSelectedFrames(new Set(frames.map(f => f.image_id)));
+    }
+  };
+
+  const deleteSelected = async () => {
+    if (selectedFrames.size === 0) return;
+    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s) selecionado(s)?`)) return;
+    try {
+      for (const id of selectedFrames) {
+        await deleteTrainingImage(id);
+      }
+      setSelectedFrames(new Set());
+      setSelectMode(false);
+      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
+      fetchTrainingStats().then(st => setStats(st)).catch(() => {});
+      if (openGroup) {
+        const f = await fetchGroupFrames(openGroup);
+        setFrames(Array.isArray(f) ? f : []);
+      }
+    } catch (err) { setError(err.message); }
   };
 
   const handleAnnotate = async (image) => {
@@ -297,23 +333,54 @@ function DatasetTab({ fixtureTypes }) {
                   {loadingFrames ? (
                     <div className="empty-state">Carregando frames...</div>
                   ) : (
-                    <div className="training-frame-grid">
-                      {frames.map(fr => (
-                        <div key={fr.image_id} className="training-frame-card">
-                          <img src={fr.thumbnail_url} alt={fr.filename} className="training-frame-thumb" loading="lazy" />
-                          <div className="training-frame-info">
-                            <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
-                            {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
-                              <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
+                    <>
+                      <div className="training-frames-toolbar">
+                        <button className={`btn btn-sm ${selectMode ? 'btn-primary' : ''}`}
+                          onClick={() => { setSelectMode(!selectMode); setSelectedFrames(new Set()); }}>
+                          {selectMode ? 'Cancelar selecao' : 'Selecionar frames'}
+                        </button>
+                        {selectMode && (
+                          <>
+                            <button className="btn btn-sm" onClick={selectAll}>
+                              {selectedFrames.size === frames.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                            </button>
+                            <button className="btn btn-sm btn-danger" disabled={selectedFrames.size === 0}
+                              onClick={deleteSelected}>
+                              Excluir {selectedFrames.size} selecionado(s)
+                            </button>
+                            <span style={{ fontSize: 12, color: '#888' }}>{selectedFrames.size} de {frames.length}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="training-frame-grid">
+                        {frames.map(fr => (
+                          <div key={fr.image_id}
+                            className={`training-frame-card ${selectMode && selectedFrames.has(fr.image_id) ? 'selected' : ''}`}
+                            onClick={selectMode ? () => toggleFrame(fr.image_id) : undefined}>
+                            <div style={{ position: 'relative' }}>
+                              <img src={fr.thumbnail_url} alt={fr.filename} className="training-frame-thumb" loading="lazy" />
+                              {selectMode && (
+                                <div className="training-frame-checkbox">
+                                  <input type="checkbox" checked={selectedFrames.has(fr.image_id)} readOnly />
+                                </div>
+                              )}
+                            </div>
+                            <div className="training-frame-info">
+                              <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
+                              {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
+                                <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
+                              )}
+                            </div>
+                            {!selectMode && (
+                              <div className="training-frame-actions">
+                                <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
+                                <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
+                              </div>
                             )}
                           </div>
-                          <div className="training-frame-actions">
-                            <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
-                            <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}

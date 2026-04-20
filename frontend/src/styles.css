@@ -793,6 +793,14 @@ body {
   box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: box-shadow 0.2s;
 }
 .training-frame-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.training-frame-card.selected { outline: 3px solid var(--app-primary); outline-offset: -3px; opacity: 0.85; }
+.training-frames-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.training-frame-checkbox {
+  position: absolute; top: 6px; left: 6px;
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.9); border-radius: 4px;
+}
+.training-frame-checkbox input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--app-primary); }
 .training-frame-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
 .training-frame-info {
   display: flex; justify-content: space-between; align-items: center;
