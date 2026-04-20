@@ -159,11 +159,34 @@ LOCAL_RESULTS = "/tmp/yolo_results"
 print(f"Starting YOLO training: model=yolov8{{MODEL_SIZE}}, epochs={{EPOCHS}}, batch={{BATCH_SIZE}}")
 print(f"Volume dataset: {{VOLUME_DATASET}}")
 
-# Copy dataset from Volume to local /tmp (Volumes not readable by YOLO on GPU clusters)
-print("Copying dataset to local disk...")
+# Copy dataset from Volume to local /tmp using Databricks SDK
+# (shutil.copytree and direct file reads don't work on Volumes in GPU clusters)
+print("Copying dataset to local disk via SDK...")
 if os.path.exists(LOCAL_DATASET):
     shutil.rmtree(LOCAL_DATASET)
-shutil.copytree(VOLUME_DATASET, LOCAL_DATASET)
+
+from databricks.sdk import WorkspaceClient
+_w = WorkspaceClient()
+
+def download_volume_dir(volume_path, local_path):
+    os.makedirs(local_path, exist_ok=True)
+    entries = list(_w.files.list_directory_contents(volume_path))
+    for entry in entries:
+        name = entry.path.split("/")[-1] if hasattr(entry, "path") else str(entry)
+        remote = f"{{volume_path}}/{{name}}" if not hasattr(entry, "path") else entry.path
+        local = os.path.join(local_path, name)
+        if getattr(entry, "is_directory", False):
+            download_volume_dir(remote, local)
+        else:
+            try:
+                resp = _w.files.download(remote)
+                with open(local, "wb") as f:
+                    f.write(resp.contents.read())
+            except Exception as e:
+                print(f"  Warning: could not download {{name}}: {{e}}")
+
+download_volume_dir(VOLUME_DATASET, LOCAL_DATASET)
+print(f"Dataset copied to: {{LOCAL_DATASET}}")
 
 # Fix data.yaml paths to use local copy
 import yaml
@@ -176,7 +199,6 @@ with open(data_yaml_path, "w") as f:
     yaml.dump(data_cfg, f)
 
 DATA_YAML = data_yaml_path
-print(f"Dataset copied to: {{LOCAL_DATASET}}")
 
 # Set up MLflow
 mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
