@@ -801,6 +801,24 @@ body {
   background: rgba(255,255,255,0.9); border-radius: 4px;
 }
 .training-frame-checkbox input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--app-primary); }
+
+/* Video Annotation Player */
+.video-annotation-player { border-top: 1px solid #e5e7eb; background: #0F172A; }
+.video-ann-container { position: relative; max-width: 800px; margin: 0 auto; }
+.video-ann-video { width: 100%; display: block; }
+.video-ann-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.video-ann-box {
+  position: absolute; border: 2px solid #10B981; border-radius: 2px;
+  transition: all 0.15s ease;
+}
+.video-ann-label {
+  position: absolute; top: -18px; left: -1px;
+  padding: 1px 6px; font-size: 10px; font-weight: 700; color: white;
+  border-radius: 2px 2px 0 0; white-space: nowrap;
+}
 .training-frame-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
 .training-frame-info {
   display: flex; justify-content: space-between; align-items: center;

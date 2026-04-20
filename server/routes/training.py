@@ -9,7 +9,7 @@ import tempfile
 import time
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -198,6 +198,18 @@ async def upload_training_image(file: UploadFile = File(...)):
 
             w_client = get_workspace_client()
             name_base = os.path.splitext(filename)[0]
+
+            # Save original video for playback
+            original_path = f"{TRAINING_IMAGES_VOLUME}/{name_base}_original.{ext}"
+            import io as _io
+            w_client.files.upload(original_path, _io.BytesIO(content), overwrite=True)
+            # Create a DB record for the original video (hidden, for streaming)
+            orig_id = int(time.time() * 1000) - 1
+            execute_update("""
+                INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
+                VALUES (%(iid)s, %(fn)s, %(vp)s, 0, 0, -1, %(sg)s, NOW())
+            """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": filename})
+
             created_records = []
             frame_idx = 0
             seconds = 0
@@ -287,33 +299,93 @@ async def list_training_groups():
     """List training sources grouped (1 entry per video/image upload)."""
     groups = execute_query("""
         SELECT COALESCE(source_group, filename) as source_name,
-            COUNT(*) as frame_count,
-            SUM(COALESCE(annotation_count, 0)) as total_annotations,
-            MIN(image_id) as first_image_id,
-            MIN(uploaded_at) as uploaded_at
+            COUNT(*) FILTER (WHERE annotation_count >= 0) as frame_count,
+            SUM(COALESCE(annotation_count, 0)) FILTER (WHERE annotation_count >= 0) as total_annotations,
+            MIN(image_id) FILTER (WHERE annotation_count >= 0) as first_image_id,
+            MIN(uploaded_at) as uploaded_at,
+            BOOL_OR(filename LIKE '%%_original.%%') as has_video
         FROM training_images
         GROUP BY COALESCE(source_group, filename)
         ORDER BY MIN(uploaded_at) DESC
     """)
     for g in groups:
         g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
+        if g.get("has_video"):
+            g["video_url"] = f"/api/training/groups/{g['source_name']}/video"
     return groups
 
 
 @router.get("/groups/{source_name}/frames")
 async def list_group_frames(source_name: str):
-    """List all frames for a source group (video or single image)."""
+    """List all frames for a source group, ordered by video sequence."""
     images = execute_query("""
         SELECT ti.*,
             (SELECT COUNT(*) FROM training_annotations ta WHERE ta.image_id = ti.image_id) as actual_annotation_count
         FROM training_images ti
-        WHERE COALESCE(ti.source_group, ti.filename) = %(sg)s
-        ORDER BY ti.filename
+        WHERE COALESCE(ti.source_group, ti.filename) = %(sg)s AND ti.annotation_count >= 0
+        ORDER BY ti.image_id
     """, {"sg": source_name})
     for img in images:
         img["image_url"] = f"/api/training/images/{img['image_id']}/stream"
         img["thumbnail_url"] = img["image_url"]
     return images
+
+
+@router.get("/groups/{source_name}/video")
+async def stream_group_video(source_name: str, request: Request):
+    """Stream the original video file for a source group."""
+    rows = execute_query("""
+        SELECT volume_path FROM training_images
+        WHERE COALESCE(source_group, filename) = %(sg)s AND volume_path LIKE '%%_original%%'
+        LIMIT 1
+    """, {"sg": source_name})
+    if not rows:
+        raise HTTPException(404, "Video original nao encontrado")
+    try:
+        w = get_workspace_client()
+        resp = w.files.download(rows[0]["volume_path"])
+        content = resp.contents.read()
+        total = len(content)
+        # Support Range for seeking
+        range_header = request.headers.get("range")
+        if range_header:
+            parts = range_header.replace("bytes=", "").split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if parts[1] else total - 1
+            end = min(end, total - 1)
+            chunk = content[start:end + 1]
+            return Response(content=chunk, status_code=206, media_type="video/mp4",
+                headers={"Content-Range": f"bytes {start}-{end}/{total}", "Accept-Ranges": "bytes", "Content-Length": str(len(chunk))})
+        return Response(content=content, media_type="video/mp4",
+            headers={"Accept-Ranges": "bytes", "Content-Length": str(total)})
+    except Exception as e:
+        raise HTTPException(500, f"Erro: {e}")
+
+
+@router.get("/groups/{source_name}/all-annotations")
+async def get_group_annotations(source_name: str):
+    """Get all annotations for all frames in a group, keyed by second."""
+    rows = execute_query("""
+        SELECT ti.image_id, ti.filename,
+            ta.fixture_type, ta.x_center as x, ta.y_center as y, ta.width as w, ta.height as h
+        FROM training_images ti
+        JOIN training_annotations ta ON ti.image_id = ta.image_id
+        WHERE COALESCE(ti.source_group, ti.filename) = %(sg)s
+        ORDER BY ti.image_id, ta.annotation_id
+    """, {"sg": source_name})
+
+    # Group by second (extract from filename pattern _frame_{N}s.jpg)
+    import re
+    by_second = {}
+    for r in rows:
+        match = re.search(r'_frame_(\d+)s', r["filename"])
+        sec = int(match.group(1)) if match else 0
+        if sec not in by_second:
+            by_second[sec] = []
+        by_second[sec].append({
+            "fixture_type": r["fixture_type"], "x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"],
+        })
+    return by_second
 
 
 import threading

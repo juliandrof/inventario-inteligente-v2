@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus,
+  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus, fetchGroupAnnotations,
   fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
   startTrainingJob, fetchTrainingJobs, fetchJobDetail, pollJobStatus,
@@ -93,6 +93,7 @@ function DatasetTab({ fixtureTypes }) {
   const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
   const [selectedFrames, setSelectedFrames] = useState(new Set());
   const [selectMode, setSelectMode] = useState(false);
+  const [playingGroup, setPlayingGroup] = useState(null); // source_name of video being played
 
   // Annotation editor state
   const [annotatingImage, setAnnotatingImage] = useState(null);
@@ -315,6 +316,11 @@ function DatasetTab({ fixtureTypes }) {
                   </div>
                 </div>
                 <div className="training-group-actions" onClick={e => e.stopPropagation()}>
+                  {g.has_video && (
+                    <button className="btn btn-sm" onClick={() => setPlayingGroup(playingGroup === g.source_name ? null : g.source_name)}>
+                      {playingGroup === g.source_name ? 'Parar' : 'Play'}
+                    </button>
+                  )}
                   <button className="btn btn-sm btn-primary" onClick={() => handleOpenGroup(g.source_name)}>
                     {openGroup === g.source_name ? 'Fechar' : 'Anotar'}
                   </button>
@@ -326,6 +332,15 @@ function DatasetTab({ fixtureTypes }) {
                   </button>
                 </div>
               </div>
+
+              {/* Video player with annotation overlay */}
+              {playingGroup === g.source_name && g.video_url && (
+                <VideoAnnotationPlayer
+                  videoUrl={g.video_url}
+                  sourceName={g.source_name}
+                  fixtureTypes={ftArray}
+                />
+              )}
 
               {/* Frame browser (expanded) */}
               {openGroup === g.source_name && (
@@ -403,6 +418,61 @@ function DatasetTab({ fixtureTypes }) {
     </>
   );
 }
+
+/* ========== VIDEO ANNOTATION PLAYER ========== */
+function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
+  const videoRef = useRef(null);
+  const [annotations, setAnnotations] = useState({});
+  const [currentAnns, setCurrentAnns] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    fetchGroupAnnotations(sourceName).then(data => {
+      setAnnotations(data || {});
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  }, [sourceName]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onTime = () => {
+      const sec = Math.floor(video.currentTime);
+      setCurrentAnns(annotations[sec] || []);
+    };
+    video.addEventListener('timeupdate', onTime);
+    return () => video.removeEventListener('timeupdate', onTime);
+  }, [annotations]);
+
+  const typeColorMap = {};
+  (fixtureTypes || []).forEach(ft => { typeColorMap[ft.name] = ft.color || '#E11D48'; });
+
+  return (
+    <div className="video-annotation-player">
+      <div className="video-ann-container">
+        <video ref={videoRef} src={videoUrl} controls className="video-ann-video" />
+        <div className="video-ann-overlay">
+          {currentAnns.map((ann, i) => (
+            <div key={i} className="video-ann-box" style={{
+              left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
+              width: `${ann.w}%`, height: `${ann.h}%`,
+              borderColor: typeColorMap[ann.fixture_type] || '#10B981',
+            }}>
+              <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
+                {ann.fixture_type}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {!loaded && <div className="empty-state">Carregando anotacoes...</div>}
+      <div style={{ padding: '8px 12px', fontSize: 12, color: '#888' }}>
+        {currentAnns.length > 0 ? `${currentAnns.length} expositor(es) detectado(s)` : 'Sem anotacoes neste segundo'}
+      </div>
+    </div>
+  );
+}
+
 
 /* ========== TRAINING TAB ========== */
 function TrainingTab() {
