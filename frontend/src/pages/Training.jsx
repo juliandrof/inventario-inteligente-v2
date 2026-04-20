@@ -432,6 +432,9 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const [currentAnns, setCurrentAnns] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   useEffect(() => {
     fetchGroupAnnotations(sourceName).then(data => {
@@ -446,12 +449,23 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     const onTime = () => {
       const sec = Math.floor(video.currentTime);
       setCurrentAnns(annotations[sec] || []);
+      setCurrentTime(video.currentTime);
     };
+    const onMeta = () => setDuration(video.duration || 0);
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
     video.addEventListener('timeupdate', onTime);
-    return () => video.removeEventListener('timeupdate', onTime);
+    video.addEventListener('loadedmetadata', onMeta);
+    video.addEventListener('play', onPlay);
+    video.addEventListener('pause', onPause);
+    return () => {
+      video.removeEventListener('timeupdate', onTime);
+      video.removeEventListener('loadedmetadata', onMeta);
+      video.removeEventListener('play', onPlay);
+      video.removeEventListener('pause', onPause);
+    };
   }, [annotations]);
 
-  // Listen for fullscreen changes
   useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFs);
@@ -466,35 +480,64 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     }
   };
 
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.paused ? v.play() : v.pause();
+  };
+
+  const seek = (e) => {
+    const v = videoRef.current;
+    if (!v || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct = (e.clientX - rect.left) / rect.width;
+    v.currentTime = pct * duration;
+  };
+
+  const fmtTime = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
   const typeColorMap = {};
   (fixtureTypes || []).forEach(ft => { typeColorMap[ft.name] = ft.color || '#E11D48'; });
 
   return (
     <div className="video-annotation-player">
       <div className={`video-ann-container ${isFullscreen ? 'fullscreen' : ''}`} ref={containerRef}>
-        {/* controlsList=nofullscreen hides native fullscreen button so user uses ours */}
-        <video ref={videoRef} src={videoUrl} controls controlsList="nofullscreen" className="video-ann-video" />
-        <div className="video-ann-overlay">
-          {currentAnns.map((ann, i) => (
-            <div key={i} className="video-ann-box" style={{
-              left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
-              width: `${ann.w}%`, height: `${ann.h}%`,
-              borderColor: typeColorMap[ann.fixture_type] || '#10B981',
-            }}>
-              <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
-                {ann.fixture_type}
-              </span>
-            </div>
-          ))}
+        {/* No native controls - fully custom */}
+        <div className="video-ann-viewport" onClick={togglePlay}>
+          <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
+          <div className="video-ann-overlay">
+            {currentAnns.map((ann, i) => (
+              <div key={i} className="video-ann-box" style={{
+                left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
+                width: `${ann.w}%`, height: `${ann.h}%`,
+                borderColor: typeColorMap[ann.fixture_type] || '#10B981',
+              }}>
+                <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
+                  {ann.fixture_type}
+                </span>
+              </div>
+            ))}
+          </div>
+          {!playing && <div className="video-ann-play-overlay" onClick={togglePlay}>
+            <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
+          </div>}
         </div>
-        <button className="video-ann-fullscreen-btn" onClick={toggleFullscreen} title="Tela cheia">
-          {isFullscreen ? '✕' : '⛶'}
-        </button>
+        {/* Custom controls bar */}
+        <div className="video-ann-controls">
+          <button className="video-ann-ctrl-btn" onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
+          <div className="video-ann-seekbar" onClick={seek}>
+            <div className="video-ann-seekbar-fill" style={{ width: duration ? `${(currentTime / duration) * 100}%` : '0%' }} />
+          </div>
+          <span className="video-ann-time">{fmtTime(currentTime)} / {fmtTime(duration)}</span>
+          <span className="video-ann-det-count">{currentAnns.length} det.</span>
+          <button className="video-ann-ctrl-btn" onClick={toggleFullscreen}>{isFullscreen ? '✕' : '⛶'}</button>
+        </div>
       </div>
       {!loaded && <div className="empty-state">Carregando anotacoes...</div>}
-      <div style={{ padding: '8px 12px', fontSize: 12, color: '#888' }}>
-        {currentAnns.length > 0 ? `${currentAnns.length} expositor(es) detectado(s)` : 'Sem anotacoes neste segundo'}
-      </div>
     </div>
   );
 }
