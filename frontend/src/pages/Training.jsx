@@ -435,6 +435,7 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [videoRect, setVideoRect] = useState(null); // {left, top, width, height} of actual video within viewport
 
   useEffect(() => {
     fetchGroupAnnotations(sourceName).then(data => {
@@ -451,7 +452,7 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
       setCurrentAnns(annotations[sec] || []);
       setCurrentTime(video.currentTime);
     };
-    const onMeta = () => setDuration(video.duration || 0);
+    const onMeta = () => { setDuration(video.duration || 0); updateVideoRect(); };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     video.addEventListener('timeupdate', onTime);
@@ -466,11 +467,45 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     };
   }, [annotations]);
 
-  useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', onFs);
-    return () => document.removeEventListener('fullscreenchange', onFs);
+  const updateVideoRect = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
+    const cw = video.clientWidth;
+    const ch = video.clientHeight;
+    // Video aspect vs container aspect
+    const videoAspect = vw / vh;
+    const containerAspect = cw / ch;
+    let renderW, renderH, offsetX, offsetY;
+    if (containerAspect > videoAspect) {
+      // Container is wider - video has black bars on sides
+      renderH = ch;
+      renderW = ch * videoAspect;
+      offsetX = (cw - renderW) / 2;
+      offsetY = 0;
+    } else {
+      // Container is taller - video has black bars top/bottom
+      renderW = cw;
+      renderH = cw / videoAspect;
+      offsetX = 0;
+      offsetY = (ch - renderH) / 2;
+    }
+    setVideoRect({ left: offsetX, top: offsetY, width: renderW, height: renderH });
   }, []);
+
+  useEffect(() => {
+    const onFs = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      setTimeout(updateVideoRect, 100); // recalc after layout settles
+    };
+    document.addEventListener('fullscreenchange', onFs);
+    window.addEventListener('resize', updateVideoRect);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFs);
+      window.removeEventListener('resize', updateVideoRect);
+    };
+  }, [updateVideoRect]);
 
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
@@ -509,7 +544,10 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
         {/* No native controls - fully custom */}
         <div className="video-ann-viewport" onClick={togglePlay}>
           <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
-          <div className="video-ann-overlay">
+          <div className="video-ann-overlay" style={videoRect ? {
+            left: videoRect.left, top: videoRect.top,
+            width: videoRect.width, height: videoRect.height,
+          } : {}}>
             {currentAnns.map((ann, i) => (
               <div key={i} className="video-ann-box" style={{
                 left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
