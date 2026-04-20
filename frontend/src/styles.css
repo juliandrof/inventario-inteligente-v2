@@ -819,6 +819,20 @@ body {
   padding: 1px 6px; font-size: 10px; font-weight: 700; color: white;
   border-radius: 2px 2px 0 0; white-space: nowrap;
 }
+.video-ann-fullscreen-btn {
+  position: absolute; bottom: 50px; right: 12px; z-index: 10;
+  width: 36px; height: 36px; border-radius: 8px; border: none;
+  background: rgba(0,0,0,0.6); color: white; font-size: 18px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s;
+}
+.video-ann-fullscreen-btn:hover { background: rgba(0,0,0,0.8); }
+.video-ann-container.fullscreen {
+  background: black; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.video-ann-container.fullscreen .video-ann-video { max-height: 100vh; width: auto; max-width: 100vw; }
+.video-ann-container.fullscreen .video-ann-overlay { /* stays on top */ }
 .training-frame-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
 .training-frame-info {
   display: flex; justify-content: space-between; align-items: center;

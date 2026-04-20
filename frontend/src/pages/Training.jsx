@@ -113,6 +113,8 @@ function DatasetTab({ fixtureTypes }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const [uploadProgress, setUploadProgress] = useState('');
+
   const handleUpload = async (files) => {
     if (!files || files.length === 0) return;
     setUploading(true);
@@ -120,21 +122,24 @@ function DatasetTab({ fixtureTypes }) {
     setUploadMessage(null);
     try {
       const messages = [];
-      for (const file of files) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress(`Processando ${file.name} (${i + 1}/${files.length})...`);
         const result = await uploadTrainingImage(file);
         if (result && result.frames_extracted) {
-          messages.push(`${result.frames_extracted} frames extraidos de "${file.name}"`);
+          messages.push(`${result.frames_extracted} frames de "${file.name}"`);
         } else {
           messages.push(`"${file.name}" adicionado`);
         }
       }
       setUploadMessage(messages.join('. '));
-      setTimeout(() => setUploadMessage(null), 6000);
+      setTimeout(() => setUploadMessage(null), 8000);
       load();
     } catch (err) {
       setError(err.message);
     } finally {
       setUploading(false);
+      setUploadProgress('');
     }
   };
 
@@ -291,7 +296,7 @@ function DatasetTab({ fixtureTypes }) {
             <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4" stroke="#999" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </div>
-        <p>{uploading ? 'Extraindo frames...' : 'Arraste videos ou imagens aqui'}</p>
+        <p>{uploading ? (uploadProgress || 'Extraindo frames...') : 'Arraste videos ou imagens aqui'}</p>
         <p className="upload-hint">Videos: frames extraidos a 1/segundo | Imagens: adicionadas diretamente</p>
         <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
           onChange={e => handleUpload(e.target.files)} />
@@ -422,9 +427,11 @@ function DatasetTab({ fixtureTypes }) {
 /* ========== VIDEO ANNOTATION PLAYER ========== */
 function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const videoRef = useRef(null);
+  const containerRef = useRef(null);
   const [annotations, setAnnotations] = useState({});
   const [currentAnns, setCurrentAnns] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     fetchGroupAnnotations(sourceName).then(data => {
@@ -444,13 +451,29 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     return () => video.removeEventListener('timeupdate', onTime);
   }, [annotations]);
 
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      containerRef.current?.requestFullscreen();
+    }
+  };
+
   const typeColorMap = {};
   (fixtureTypes || []).forEach(ft => { typeColorMap[ft.name] = ft.color || '#E11D48'; });
 
   return (
     <div className="video-annotation-player">
-      <div className="video-ann-container">
-        <video ref={videoRef} src={videoUrl} controls className="video-ann-video" />
+      <div className={`video-ann-container ${isFullscreen ? 'fullscreen' : ''}`} ref={containerRef}>
+        {/* controlsList=nofullscreen hides native fullscreen button so user uses ours */}
+        <video ref={videoRef} src={videoUrl} controls controlsList="nofullscreen" className="video-ann-video" />
         <div className="video-ann-overlay">
           {currentAnns.map((ann, i) => (
             <div key={i} className="video-ann-box" style={{
@@ -464,6 +487,9 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
             </div>
           ))}
         </div>
+        <button className="video-ann-fullscreen-btn" onClick={toggleFullscreen} title="Tela cheia">
+          {isFullscreen ? '✕' : '⛶'}
+        </button>
       </div>
       {!loaded && <div className="empty-state">Carregando anotacoes...</div>}
       <div style={{ padding: '8px 12px', fontSize: 12, color: '#888' }}>

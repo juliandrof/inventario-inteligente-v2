@@ -194,7 +194,7 @@ async def upload_training_image(file: UploadFile = File(...)):
                 raise HTTPException(400, "Could not open video file")
 
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            frame_interval = max(1, int(round(fps)))  # frames per second
+            frame_interval = max(1, int(round(fps * 2)))  # 1 frame every 2 seconds
 
             w_client = get_workspace_client()
             name_base = os.path.splitext(filename)[0]
@@ -220,7 +220,7 @@ async def upload_training_image(file: UploadFile = File(...)):
                     break
                 if frame_idx % frame_interval == 0:
                     # Encode frame as JPEG
-                    _, jpeg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    _, jpeg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                     jpeg_bytes = jpeg_buf.tobytes()
                     h_frame, w_frame = frame.shape[:2]
 
