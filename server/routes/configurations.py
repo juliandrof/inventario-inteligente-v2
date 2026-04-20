@@ -122,7 +122,10 @@ async def delete_fixture_type(name: str):
 @router.post("/clear-all")
 async def clear_all_data():
     """Delete all analysis data (videos, fixtures, detections, anomalies, stores)."""
-    tables = ["detections", "fixtures", "fixture_summary", "anomalies", "processing_log", "videos", "stores"]
+    tables = [
+        "training_annotations", "training_images", "trained_models", "training_jobs",
+        "detections", "fixtures", "fixture_summary", "anomalies", "processing_log", "videos", "stores",
+    ]
     deleted = {}
     for t in tables:
         rows = execute_update(f"DELETE FROM {t}")
