@@ -185,8 +185,9 @@ import yaml
 yaml_path = os.path.join(LOCAL_DATASET, "data.yaml")
 with open(yaml_path) as f:
     cfg = yaml.safe_load(f)
-cfg["train"] = os.path.join(LOCAL_DATASET, "images", "train")
-cfg["val"] = os.path.join(LOCAL_DATASET, "images", "val")
+cfg["path"] = LOCAL_DATASET
+cfg["train"] = "images/train"
+cfg["val"] = "images/val"
 with open(yaml_path, "w") as f:
     yaml.dump(cfg, f)
 print(f"Dataset ready at {LOCAL_DATASET}")
