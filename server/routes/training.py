@@ -840,20 +840,24 @@ async def list_training_jobs(limit: int = Query(20), offset: int = Query(0)):
         LIMIT %(limit)s OFFSET %(offset)s
     """, {"limit": limit, "offset": offset})
 
-    # Auto-sync RUNNING/PENDING jobs with Databricks
+    # Auto-sync RUNNING/PENDING jobs with Databricks (max 1 per request to avoid slowness)
+    synced = False
     for job in jobs:
         if job.get("status") in ("RUNNING", "PENDING") and job.get("databricks_run_id"):
             try:
-                _sync_job_status(job["job_id"], job["databricks_run_id"])
+                new_status = _sync_job_status(job["job_id"], job["databricks_run_id"])
+                job["status"] = new_status  # update in-memory
+                synced = True
             except Exception as e:
                 logger.warning(f"Auto-sync failed for job {job['job_id']}: {e}")
+            break  # only sync one per request
 
-    # Re-fetch after sync to get updated statuses
-    jobs = execute_query("""
-        SELECT * FROM training_jobs
-        ORDER BY started_at DESC
-        LIMIT %(limit)s OFFSET %(offset)s
-    """, {"limit": limit, "offset": offset})
+    if synced:
+        jobs = execute_query("""
+            SELECT * FROM training_jobs
+            ORDER BY started_at DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+        """, {"limit": limit, "offset": offset})
 
     # Compute duration_seconds for each job
     for job in jobs:

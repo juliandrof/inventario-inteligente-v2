@@ -562,25 +562,20 @@ function TrainingTab() {
   const loadJobs = useCallback(() => {
     setLoading(true);
     fetchTrainingJobs()
-      .then(resp => {
-        const jobList = resp.jobs || resp || [];
-        setJobs(jobList);
-        // Explicitly poll status for RUNNING/PENDING jobs to trigger backend sync
-        jobList.forEach(job => {
-          if ((job.status === 'RUNNING' || job.status === 'PENDING') && job.job_id) {
-            pollJobStatus(job.job_id).catch(() => {});
-          }
-        });
-      })
+      .then(resp => setJobs(resp.jobs || resp || []))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     loadJobs();
-    const interval = setInterval(loadJobs, 10000);
+    // Poll only while there are active jobs, at a reasonable interval
+    const interval = setInterval(() => {
+      const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
+      if (hasActive) loadJobs();
+    }, 15000);
     return () => clearInterval(interval);
-  }, [loadJobs]);
+  }, [loadJobs, jobs]);
 
   const handleStart = async () => {
     setStarting(true);
