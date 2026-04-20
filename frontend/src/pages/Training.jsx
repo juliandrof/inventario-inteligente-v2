@@ -435,7 +435,6 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [videoRect, setVideoRect] = useState(null); // {left, top, width, height} of actual video within viewport
 
   useEffect(() => {
     fetchGroupAnnotations(sourceName).then(data => {
@@ -452,7 +451,7 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
       setCurrentAnns(annotations[sec] || []);
       setCurrentTime(video.currentTime);
     };
-    const onMeta = () => { setDuration(video.duration || 0); updateVideoRect(); };
+    const onMeta = () => setDuration(video.duration || 0);
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     video.addEventListener('timeupdate', onTime);
@@ -467,45 +466,11 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     };
   }, [annotations]);
 
-  const updateVideoRect = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const vw = video.videoWidth || 1;
-    const vh = video.videoHeight || 1;
-    const cw = video.clientWidth;
-    const ch = video.clientHeight;
-    // Video aspect vs container aspect
-    const videoAspect = vw / vh;
-    const containerAspect = cw / ch;
-    let renderW, renderH, offsetX, offsetY;
-    if (containerAspect > videoAspect) {
-      // Container is wider - video has black bars on sides
-      renderH = ch;
-      renderW = ch * videoAspect;
-      offsetX = (cw - renderW) / 2;
-      offsetY = 0;
-    } else {
-      // Container is taller - video has black bars top/bottom
-      renderW = cw;
-      renderH = cw / videoAspect;
-      offsetX = 0;
-      offsetY = (ch - renderH) / 2;
-    }
-    setVideoRect({ left: offsetX, top: offsetY, width: renderW, height: renderH });
-  }, []);
-
   useEffect(() => {
-    const onFs = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-      setTimeout(updateVideoRect, 100); // recalc after layout settles
-    };
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', onFs);
-    window.addEventListener('resize', updateVideoRect);
-    return () => {
-      document.removeEventListener('fullscreenchange', onFs);
-      window.removeEventListener('resize', updateVideoRect);
-    };
-  }, [updateVideoRect]);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
 
   const toggleFullscreen = () => {
     if (document.fullscreenElement) {
@@ -541,28 +506,27 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   return (
     <div className="video-annotation-player">
       <div className={`video-ann-container ${isFullscreen ? 'fullscreen' : ''}`} ref={containerRef}>
-        {/* No native controls - fully custom */}
+        {/* Video + overlay wrapper: overlay is sized by the video element */}
         <div className="video-ann-viewport" onClick={togglePlay}>
-          <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
-          <div className="video-ann-overlay" style={videoRect ? {
-            left: videoRect.left, top: videoRect.top,
-            width: videoRect.width, height: videoRect.height,
-          } : {}}>
-            {currentAnns.map((ann, i) => (
-              <div key={i} className="video-ann-box" style={{
-                left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
-                width: `${ann.w}%`, height: `${ann.h}%`,
-                borderColor: typeColorMap[ann.fixture_type] || '#10B981',
-              }}>
-                <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
-                  {ann.fixture_type}
-                </span>
-              </div>
-            ))}
+          <div className="video-ann-video-wrap">
+            <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
+            <div className="video-ann-overlay">
+              {currentAnns.map((ann, i) => (
+                <div key={i} className="video-ann-box" style={{
+                  left: `${ann.x - ann.w / 2}%`, top: `${ann.y - ann.h / 2}%`,
+                  width: `${ann.w}%`, height: `${ann.h}%`,
+                  borderColor: typeColorMap[ann.fixture_type] || '#10B981',
+                }}>
+                  <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
+                    {ann.fixture_type}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {!playing && <div className="video-ann-play-overlay">
+              <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
+            </div>}
           </div>
-          {!playing && <div className="video-ann-play-overlay" onClick={togglePlay}>
-            <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
-          </div>}
         </div>
         {/* Custom controls bar */}
         <div className="video-ann-controls">
