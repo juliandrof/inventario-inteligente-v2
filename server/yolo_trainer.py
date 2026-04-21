@@ -19,27 +19,29 @@ MODELS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/trained_models"
 
 
 def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
-    """Export all training images + annotations from DB to YOLO format in a Volume.
+    """Export training images + annotations as a ZIP file to a Volume.
 
-    Creates:
-      {output}/images/train/  images/val/
-      {output}/labels/train/  labels/val/
-      {output}/data.yaml
+    The ZIP contains the full YOLO dataset structure:
+      images/train/  images/val/
+      labels/train/  labels/val/
+      data.yaml
 
-    Returns the output volume path.
+    Returns the Volume path to the ZIP file.
     """
+    import io
+    import zipfile
+    import tempfile
+
     if not output_volume_path:
         run_id = int(time.time() * 1000)
         output_volume_path = f"{DATASET_VOLUME}/dataset_{run_id}"
 
     w = get_workspace_client()
 
-    # Load fixture types for class mapping
     fixture_rows = execute_query("SELECT name FROM fixture_types ORDER BY name")
     class_names = [r["name"] for r in fixture_rows]
     class_map = {name: idx for idx, name in enumerate(class_names)}
 
-    # Load all images that have at least one annotation
     images = execute_query("""
         SELECT ti.image_id, ti.filename, ti.volume_path, ti.width, ti.height
         FROM training_images ti
@@ -50,68 +52,66 @@ def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
     if not images:
         raise ValueError("No annotated images found for export")
 
-    # Shuffle and split 80/20
     random.shuffle(images)
     split_idx = max(1, int(len(images) * 0.8))
     train_images = images[:split_idx]
     val_images = images[split_idx:] if split_idx < len(images) else images[-1:]
 
-    def _upload_bytes(path: str, data: bytes):
-        import io
-        w.files.upload(path, io.BytesIO(data), overwrite=True)
-
-    def _copy_image_and_labels(img_list: list[dict], subset: str):
-        for img in img_list:
-            # Copy image file
-            src_path = img["volume_path"]
-            fname = img["filename"]
-            dst_image_path = f"{output_volume_path}/images/{subset}/{fname}"
-
-            try:
-                resp = w.files.download(src_path)
-                image_bytes = resp.contents.read()
-                _upload_bytes(dst_image_path, image_bytes)
-            except Exception as e:
-                logger.warning(f"Failed to copy image {fname}: {e}")
-                continue
-
-            # Build YOLO label file
-            annotations = execute_query("""
-                SELECT fixture_type, x_center, y_center, width, height
-                FROM training_annotations
-                WHERE image_id = %(iid)s
-            """, {"iid": img["image_id"]})
-
-            label_lines = []
-            for ann in annotations:
-                cls_id = class_map.get(ann["fixture_type"])
-                if cls_id is None:
+    # Build ZIP in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for subset, img_list in [("train", train_images), ("val", val_images)]:
+            for img in img_list:
+                fname = img["filename"]
+                # Download image from Volume and add to ZIP
+                try:
+                    resp = w.files.download(img["volume_path"])
+                    image_bytes = resp.contents.read()
+                    zf.writestr(f"images/{subset}/{fname}", image_bytes)
+                except Exception as e:
+                    logger.warning(f"Failed to download {fname}: {e}")
                     continue
-                # Annotations are stored as percentages 0-100, YOLO needs 0-1
-                x_c = float(ann["x_center"]) / 100.0
-                y_c = float(ann["y_center"]) / 100.0
-                w_n = float(ann["width"]) / 100.0
-                h_n = float(ann["height"]) / 100.0
-                label_lines.append(f"{cls_id} {x_c:.6f} {y_c:.6f} {w_n:.6f} {h_n:.6f}")
 
-            label_fname = os.path.splitext(fname)[0] + ".txt"
-            dst_label_path = f"{output_volume_path}/labels/{subset}/{label_fname}"
-            label_content = "\n".join(label_lines)
-            _upload_bytes(dst_label_path, label_content.encode("utf-8"))
+                # Build YOLO label
+                annotations = execute_query("""
+                    SELECT fixture_type, x_center, y_center, width, height
+                    FROM training_annotations WHERE image_id = %(iid)s
+                """, {"iid": img["image_id"]})
+
+                label_lines = []
+                for ann in annotations:
+                    cls_id = class_map.get(ann["fixture_type"])
+                    if cls_id is None:
+                        continue
+                    x_c = float(ann["x_center"]) / 100.0
+                    y_c = float(ann["y_center"]) / 100.0
+                    w_n = float(ann["width"]) / 100.0
+                    h_n = float(ann["height"]) / 100.0
+                    label_lines.append(f"{cls_id} {x_c:.6f} {y_c:.6f} {w_n:.6f} {h_n:.6f}")
+
+                label_fname = os.path.splitext(fname)[0] + ".txt"
+                zf.writestr(f"labels/{subset}/{label_fname}", "\n".join(label_lines))
+
+        # data.yaml with placeholder path (will be rewritten by training script)
+        data_yaml = (
+            f"path: /tmp/yolo_dataset\n"
+            f"train: images/train\n"
+            f"val: images/val\n"
+            f"\nnc: {len(class_names)}\n"
+            f"names: {json.dumps(class_names)}\n"
+        )
+        zf.writestr("data.yaml", data_yaml)
 
     logger.info(f"Exporting YOLO dataset: {len(train_images)} train, {len(val_images)} val")
-    _copy_image_and_labels(train_images, "train")
-    _copy_image_and_labels(val_images, "val")
 
-    # Create data.yaml
-    data_yaml = (
-        f"path: {output_volume_path}\n"
-        f"train: images/train\n"
-        f"val: images/val\n"
-        f"\n"
-        f"nc: {len(class_names)}\n"
-        f"names: {json.dumps(class_names)}\n"
-    )
+    # Upload ZIP to Volume
+    zip_path = f"{output_volume_path}.zip"
+    zip_buffer.seek(0)
+    w.files.upload(zip_path, zip_buffer, overwrite=True)
+    zip_size_mb = zip_buffer.tell() / 1024 / 1024
+    logger.info(f"YOLO dataset ZIP uploaded: {zip_path} ({zip_size_mb:.1f} MB)")
+
+    return zip_path
     _upload_bytes(f"{output_volume_path}/data.yaml", data_yaml.encode("utf-8"))
 
     logger.info(f"YOLO dataset exported to {output_volume_path}")
@@ -136,17 +136,15 @@ def generate_training_script(
     # Inject values via str.replace after
     script_template = r'''#!/usr/bin/env python3
 """YOLO training script - auto-generated by Inventario Inteligente."""
-import subprocess, sys, json, os, shutil
+import subprocess, sys, json, os, shutil, zipfile
 
-# Install deps
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow", "pyyaml"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow"])
 
 from ultralytics import YOLO
 import mlflow
 from databricks.sdk import WorkspaceClient
 
-# --- Configuration (injected at generation time) ---
-VOLUME_DATASET = "__DATASET_PATH__"
+DATASET_ZIP = "__DATASET_PATH__"
 MODEL_SIZE = "__MODEL_SIZE__"
 EPOCHS = __EPOCHS__
 BATCH_SIZE = __BATCH_SIZE__
@@ -154,43 +152,29 @@ VOLUME_RESULTS = "__RESULTS_PATH__"
 LOCAL_DATASET = "/tmp/yolo_dataset"
 LOCAL_RESULTS = "/tmp/yolo_results"
 
-print(f"Config: model=yolov8{MODEL_SIZE}, epochs={EPOCHS}, batch={BATCH_SIZE}")
-print(f"Volume dataset: {VOLUME_DATASET}")
+print(f"Config: yolov8{MODEL_SIZE}, epochs={EPOCHS}, batch={BATCH_SIZE}")
 
-# --- Step 1: Copy dataset from Volume to local /tmp ---
-print("Step 1: Downloading dataset from Volume...")
+# --- Step 1: Download ZIP and extract ---
+print("Step 1: Downloading dataset ZIP...")
 if os.path.exists(LOCAL_DATASET):
     shutil.rmtree(LOCAL_DATASET)
 
 w = WorkspaceClient()
+resp = w.files.download(DATASET_ZIP)
+with open("/tmp/dataset.zip", "wb") as f:
+    f.write(resp.contents.read())
+print(f"Downloaded: {os.path.getsize('/tmp/dataset.zip') / 1024 / 1024:.1f} MB")
 
-def dl_dir(vol_path, local_path):
-    os.makedirs(local_path, exist_ok=True)
-    for entry in w.files.list_directory_contents(vol_path):
-        name = entry.path.split("/")[-1]
-        remote = entry.path
-        local = os.path.join(local_path, name)
-        if entry.is_directory:
-            dl_dir(remote, local)
-        else:
-            resp = w.files.download(remote)
-            with open(local, "wb") as f:
-                f.write(resp.contents.read())
-            print(f"  {name}")
+with zipfile.ZipFile("/tmp/dataset.zip", "r") as zf:
+    zf.extractall(LOCAL_DATASET)
+os.remove("/tmp/dataset.zip")
 
-dl_dir(VOLUME_DATASET, LOCAL_DATASET)
+for d in ["images/train", "images/val", "labels/train", "labels/val"]:
+    p = os.path.join(LOCAL_DATASET, d)
+    n = len(os.listdir(p)) if os.path.exists(p) else 0
+    print(f"  {d}: {n} files")
 
-# Fix data.yaml paths
-import yaml
-yaml_path = os.path.join(LOCAL_DATASET, "data.yaml")
-with open(yaml_path) as f:
-    cfg = yaml.safe_load(f)
-cfg["path"] = LOCAL_DATASET
-cfg["train"] = "images/train"
-cfg["val"] = "images/val"
-with open(yaml_path, "w") as f:
-    yaml.dump(cfg, f)
-print(f"Dataset ready at {LOCAL_DATASET}")
+DATA_YAML = os.path.join(LOCAL_DATASET, "data.yaml")
 
 # --- Step 2: Train ---
 print("Step 2: Training...")
@@ -201,12 +185,11 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
 
     model = YOLO(f"yolov8{MODEL_SIZE}.pt")
     results = model.train(
-        data=yaml_path, epochs=EPOCHS, batch=BATCH_SIZE,
+        data=DATA_YAML, epochs=EPOCHS, batch=BATCH_SIZE,
         imgsz=640, project=LOCAL_RESULTS, name="train",
         exist_ok=True, verbose=True,
     )
 
-    # Extract metrics
     metrics = {}
     try:
         rd = results.results_dict
@@ -215,7 +198,7 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
         metrics["precision"] = float(rd.get("metrics/precision(B)", 0))
         metrics["recall"] = float(rd.get("metrics/recall(B)", 0))
     except Exception as e:
-        print(f"Metric extraction warning: {e}")
+        print(f"Metric warning: {e}")
 
     try:
         if hasattr(results, "names") and hasattr(results, "maps"):
@@ -227,36 +210,32 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
         if isinstance(v, (int, float)):
             mlflow.log_metric(k, v)
 
-    # Log artifacts
     train_dir = os.path.join(LOCAL_RESULTS, "train")
     for artifact in ["weights/best.pt", "confusion_matrix.png", "results.png"]:
         p = os.path.join(train_dir, artifact)
         if os.path.exists(p):
             mlflow.log_artifact(p)
 
-    # --- Step 3: Copy results to Volume ---
-    print("Step 3: Uploading results to Volume...")
+    # --- Step 3: Upload results to Volume ---
+    print("Step 3: Uploading results...")
     metrics["mlflow_run_id"] = run.info.run_id
     metrics["best_model_path"] = f"{VOLUME_RESULTS}/train/weights/best.pt"
 
-    # Save metrics.json locally
     mj = os.path.join(train_dir, "metrics.json")
     with open(mj, "w") as f:
         json.dump(metrics, f, indent=2)
 
-    # Upload key files
     for fname in ["metrics.json", "weights/best.pt", "weights/last.pt", "confusion_matrix.png", "results.png"]:
         src = os.path.join(train_dir, fname)
         if os.path.exists(src):
-            dst = f"{VOLUME_RESULTS}/train/{fname}"
             try:
                 with open(src, "rb") as fh:
-                    w.files.upload(dst, fh, overwrite=True)
-                print(f"  Uploaded: {fname}")
+                    w.files.upload(f"{VOLUME_RESULTS}/train/{fname}", fh, overwrite=True)
+                print(f"  {fname} OK")
             except Exception as e:
-                print(f"  Failed: {fname} - {e}")
+                print(f"  {fname} FAILED: {e}")
 
-    print(f"Done! Metrics: {json.dumps(metrics, indent=2)}")
+    print(f"Done! {json.dumps(metrics, indent=2)}")
 '''
     # Inject actual values (no f-string escaping issues)
     script = script_template
