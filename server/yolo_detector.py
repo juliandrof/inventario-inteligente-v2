@@ -12,11 +12,9 @@ import os
 import threading
 from typing import Optional
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+import io
 import numpy as np
+from PIL import Image as PILImage
 
 from server.database import execute_query, get_workspace_client
 
@@ -117,11 +115,10 @@ def get_yolo_model():
 
 
 def _decode_frame(frame_b64: str) -> np.ndarray:
-    """Decode a base64-encoded JPEG frame to a numpy array (BGR)."""
+    """Decode a base64-encoded JPEG frame to a numpy array (RGB)."""
     jpeg_bytes = base64.b64decode(frame_b64)
-    arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    return frame
+    img = PILImage.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+    return np.array(img)
 
 
 def _compute_zone(x_pct: float, y_pct: float) -> str:
@@ -304,8 +301,10 @@ def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
                 continue
 
             # Encode crop as base64 JPEG
-            _, crop_jpeg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            crop_b64 = base64.b64encode(crop_jpeg.tobytes()).decode()
+            crop_img = PILImage.fromarray(crop)
+            crop_buf = io.BytesIO()
+            crop_img.save(crop_buf, "JPEG", quality=80)
+            crop_b64 = base64.b64encode(crop_buf.getvalue()).decode()
 
             try:
                 occupancy, occupancy_pct, description = _analyze_crop_occupancy(

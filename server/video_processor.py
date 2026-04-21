@@ -11,10 +11,8 @@ import tempfile
 import re
 from datetime import datetime
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+import av
+from PIL import Image as PILImage
 
 from server.database import execute_query, execute_update, get_workspace_client, get_config
 from server.fmapi import analyze_frame_fixtures
@@ -90,20 +88,23 @@ def is_image_file(filename: str) -> bool:
 
 
 def get_video_metadata(video_path: str) -> dict:
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
+    try:
+        container = av.open(video_path)
+        stream = container.streams.video[0]
+        fps = float(stream.average_rate or 30)
+        total = stream.frames or 0
+        w = stream.codec_context.width
+        h = stream.codec_context.height
+        duration = float(stream.duration * stream.time_base) if stream.duration else 0
+        container.close()
+        return {
+            "fps": fps,
+            "total_frames": total,
+            "duration_seconds": duration,
+            "resolution": f"{w}x{h}",
+        }
+    except Exception:
         return {}
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    return {
-        "fps": fps,
-        "total_frames": total,
-        "duration_seconds": total / fps if fps > 0 else 0,
-        "resolution": f"{w}x{h}",
-    }
 
 
 def save_thumbnail(video_id: int, frame_bytes: bytes, timestamp_sec: float) -> str:
@@ -162,16 +163,18 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
         {"lid": log_id, "vid": video_id},
     )
 
-    cap = cv2.VideoCapture(local_path)
-    if not cap.isOpened():
+    try:
+        container = av.open(local_path)
+    except Exception:
         _fail_video(video_id, log_id, "Nao foi possivel abrir o video")
         return
 
-    video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total_frames / video_fps if video_fps > 0 else 0
+    stream = container.streams.video[0]
+    video_fps = float(stream.average_rate or 30)
+    total_frames = stream.frames or 0
+    duration = float(stream.duration * stream.time_base) if stream.duration else 0
     frame_interval = max(1, int(video_fps / scan_fps)) if scan_fps < video_fps else 1
-    frames_to_analyze = total_frames // frame_interval
+    frames_to_analyze = max(1, total_frames // frame_interval) if total_frames > 0 else 100
 
     logger.info(f"[V{video_id}] Video: {duration:.1f}s, {video_fps:.1f}fps, analyzing ~{frames_to_analyze} frames")
 
@@ -181,22 +184,20 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
     analyzed_count = 0
     thumbnail_map = {}  # tracking_id -> (best_confidence, thumbnail_path)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for frame in container.decode(video=0):
         if frame_idx % frame_interval == 0:
             timestamp = frame_idx / video_fps
 
-            # Resize for efficiency
-            h, w = frame.shape[:2]
+            # Convert to PIL and resize for efficiency
+            img = frame.to_image()
+            w, h = img.size
             if w > 640:
                 scale = 640 / w
-                frame = cv2.resize(frame, (640, int(h * scale)))
+                img = img.resize((640, int(h * scale)))
 
-            _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            jpeg_bytes = jpeg.tobytes()
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=80)
+            jpeg_bytes = buf.getvalue()
             frame_b64 = base64.b64encode(jpeg_bytes).decode()
 
             logger.info(f"[V{video_id}] Analyzing frame {analyzed_count+1}/{frames_to_analyze} at t={timestamp:.1f}s")
@@ -253,7 +254,7 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
 
         frame_idx += 1
 
-    cap.release()
+    container.close()
 
     # Get unique fixtures from tracker
     unique_fixtures = tracker.get_unique_fixtures(min_frames=1)

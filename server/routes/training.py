@@ -252,32 +252,18 @@ async def _do_upload(file, io, PILImage):
     video_exts = {"mp4", "avi", "mov", "mkv", "webm", "m4v", "mpg", "mpeg", "wmv", "flv", "3gp", "ts"}
 
     if ext in video_exts:
-        # --- Video: extract frames using ffmpeg (no cv2 dependency) ---
-        import subprocess, glob as _glob
+        # --- Video: extract frames using PyAV (bundled ffmpeg, no system deps) ---
+        import av
 
-        tmp_dir = tempfile.mkdtemp()
-        tmp_video_path = os.path.join(tmp_dir, f"input.{ext}")
+        tmp_video_path = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False).name
         try:
             with open(tmp_video_path, "wb") as f:
                 f.write(content)
 
-            # Extract 1 frame every 2 seconds using ffmpeg
-            frame_pattern = os.path.join(tmp_dir, "frame_%04d.jpg")
-            ffmpeg_cmd = [
-                "ffmpeg", "-i", tmp_video_path,
-                "-vf", "fps=0.5",  # 1 frame every 2 seconds
-                "-q:v", "2",       # high quality JPEG
-                "-y", frame_pattern,
-            ]
-            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode != 0:
-                logger.error(f"ffmpeg failed: {result.stderr}")
-                raise HTTPException(500, f"ffmpeg failed to extract frames: {result.stderr[:500]}")
-
-            # Get video dimensions from first frame
-            frame_files = sorted(_glob.glob(os.path.join(tmp_dir, "frame_*.jpg")))
-            if not frame_files:
-                raise HTTPException(400, "No frames could be extracted from video")
+            container = av.open(tmp_video_path)
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate or 30)
+            frame_interval = max(1, int(round(fps * 2)))  # 1 frame every 2 seconds
 
             w_client = get_workspace_client()
             name_base = os.path.splitext(filename)[0]
@@ -292,38 +278,45 @@ async def _do_upload(file, io, PILImage):
             """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": filename})
 
             created_records = []
-            for idx, frame_path in enumerate(frame_files):
-                img = PILImage.open(frame_path)
-                w_frame, h_frame = img.size
+            seconds = 0
+            for frame_idx, frame in enumerate(container.decode(video=0)):
+                if frame_idx % frame_interval == 0:
+                    img = frame.to_image()  # PIL Image
+                    w_frame, h_frame = img.size
 
-                # Re-save as optimized JPEG
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=75)
-                jpeg_bytes = buf.getvalue()
+                    buf = io.BytesIO()
+                    img.save(buf, "JPEG", quality=75)
+                    jpeg_bytes = buf.getvalue()
 
-                frame_filename = f"{name_base}_frame_{idx * 2}s.jpg"
-                frame_volume_path = f"{TRAINING_IMAGES_VOLUME}/{frame_filename}"
+                    frame_filename = f"{name_base}_frame_{seconds * 2}s.jpg"
+                    frame_volume_path = f"{TRAINING_IMAGES_VOLUME}/{frame_filename}"
 
-                w_client.files.upload(frame_volume_path, io.BytesIO(jpeg_bytes), overwrite=True)
+                    w_client.files.upload(frame_volume_path, io.BytesIO(jpeg_bytes), overwrite=True)
 
-                image_id = int(time.time() * 1000) + idx
-                execute_update("""
-                    INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
-                    VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
-                """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename})
+                    image_id = int(time.time() * 1000) + seconds
+                    execute_update("""
+                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
+                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
+                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename})
 
-                created_records.append({
-                    "image_id": image_id,
-                    "filename": frame_filename,
-                    "volume_path": frame_volume_path,
-                    "width": w_frame,
-                    "height": h_frame,
-                })
+                    created_records.append({
+                        "image_id": image_id,
+                        "filename": frame_filename,
+                        "volume_path": frame_volume_path,
+                        "width": w_frame,
+                        "height": h_frame,
+                    })
+                    seconds += 1
+
+            container.close()
+
+            if not created_records:
+                raise HTTPException(400, "No frames could be extracted from video")
 
             return {"images": created_records, "frames_extracted": len(created_records)}
         finally:
-            import shutil
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            if os.path.exists(tmp_video_path):
+                os.unlink(tmp_video_path)
 
     # --- Regular image upload ---
     width, height = 0, 0
@@ -610,23 +603,22 @@ async def stream_training_image(image_id: int):
         resp = w.files.download(rows[0]["volume_path"])
         content = resp.contents.read()
 
-        # For videos, extract first frame as JPEG thumbnail using ffmpeg
+        # For videos, extract first frame as JPEG thumbnail using PyAV
         if is_video:
             try:
-                import subprocess
+                import av
                 tmp_path = f"/tmp/train_thumb_{image_id}.{ext}"
-                out_path = f"/tmp/train_thumb_{image_id}.jpg"
                 with open(tmp_path, "wb") as f:
                     f.write(content)
-                subprocess.run(
-                    ["ffmpeg", "-i", tmp_path, "-frames:v", "1", "-q:v", "2", "-y", out_path],
-                    capture_output=True, timeout=30,
-                )
-                if os.path.exists(out_path):
-                    with open(out_path, "rb") as f:
-                        content = f.read()
+                container = av.open(tmp_path)
+                for frame in container.decode(video=0):
+                    img = frame.to_image()
+                    buf = io.BytesIO()
+                    img.save(buf, "JPEG", quality=85)
+                    content = buf.getvalue()
                     mime = "image/jpeg"
-                    os.remove(out_path)
+                    break
+                container.close()
                 os.remove(tmp_path)
             except Exception as thumb_err:
                 logger.warning(f"Could not extract video thumbnail: {thumb_err}")
@@ -673,21 +665,23 @@ async def auto_annotate_image(image_id: int):
     video_exts = {"mp4", "avi", "mov", "mkv", "webm", "m4v", "mpg", "mpeg", "wmv", "flv", "3gp", "ts"}
 
     if ext in video_exts:
-        import subprocess
+        import av
         tmp_path = f"/tmp/auto_ann_{image_id}.{ext}"
-        out_path = f"/tmp/auto_ann_{image_id}.jpg"
         with open(tmp_path, "wb") as f:
             f.write(file_bytes)
-        result = subprocess.run(
-            ["ffmpeg", "-i", tmp_path, "-frames:v", "1", "-q:v", "2", "-y", out_path],
-            capture_output=True, timeout=30,
-        )
+        container = av.open(tmp_path)
+        extracted = False
+        for frame in container.decode(video=0):
+            img = frame.to_image()
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+            file_bytes = buf.getvalue()
+            extracted = True
+            break
+        container.close()
         os.remove(tmp_path)
-        if result.returncode != 0 or not os.path.exists(out_path):
+        if not extracted:
             raise HTTPException(500, "Could not extract frame from video")
-        with open(out_path, "rb") as f:
-            file_bytes = f.read()
-        os.remove(out_path)
 
     # Resize if too large (max 1024px wide) and convert to JPEG
     try:
