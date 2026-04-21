@@ -314,6 +314,20 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
         if os.path.exists(p):
             mlflow.log_artifact(p)
 
+    # Register model in Unity Catalog Model Registry
+    try:
+        mlflow.set_registry_uri("databricks-uc")
+        model_uri = f"runs:/{run.info.run_id}/best.pt"
+        registered = mlflow.register_model(
+            model_uri,
+            "jsf_demo_catalog.scenic_crawler.yolo_fixture_detector",
+        )
+        print(f"Model registered in UC: {registered.name} v{registered.version}")
+        metrics["registered_model"] = registered.name
+        metrics["registered_version"] = registered.version
+    except Exception as e:
+        print(f"Model registration warning: {e}")
+
     # --- Step 3: Upload results to Volume ---
     print("Step 3: Uploading results...")
     metrics["mlflow_run_id"] = run.info.run_id
