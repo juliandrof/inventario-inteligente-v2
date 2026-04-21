@@ -140,6 +140,14 @@ import subprocess, sys, json, os, shutil, zipfile
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow"])
 
+# Fix distributed training issue on Databricks single-node GPU clusters
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ.pop("MASTER_ADDR", None)
+os.environ.pop("MASTER_PORT", None)
+os.environ.pop("WORLD_SIZE", None)
+os.environ.pop("RANK", None)
+os.environ.pop("LOCAL_RANK", None)
+
 from ultralytics import YOLO
 import mlflow
 from databricks.sdk import WorkspaceClient
@@ -188,6 +196,7 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
         data=DATA_YAML, epochs=EPOCHS, batch=BATCH_SIZE,
         imgsz=640, project=LOCAL_RESULTS, name="train",
         exist_ok=True, verbose=True,
+        device=0, workers=0,
     )
 
     metrics = {}
