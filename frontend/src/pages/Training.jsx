@@ -3,7 +3,7 @@ import {
   fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus, fetchGroupAnnotations,
   fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
-  startTrainingJob, fetchTrainingJobs, fetchJobDetail, pollJobStatus,
+  startTrainingJob, fetchTrainingJobs, fetchJobDetail, pollJobStatus, publishJobModel,
   fetchTrainedModels, activateModel, deleteModel,
   fetchDetectionMode, setDetectionMode, fetchTrainingStats,
   fetchConfigFixtureTypes,
@@ -611,8 +611,9 @@ function TrainingTab() {
 
   const handlePublish = async (jobId) => {
     try {
-      await activateModel(jobId);
+      await publishJobModel(jobId);
       loadJobs(false);
+      setError(null);
     } catch (err) {
       setError(err.message);
     }

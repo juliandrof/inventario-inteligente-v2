@@ -808,9 +808,9 @@ async def start_training_job(payload: StartJobPayload):
         # Step 4: Update job with run ID
         execute_update("""
             UPDATE training_jobs
-            SET databricks_run_id = %(rid)s, status = 'RUNNING'
+            SET databricks_run_id = %(rid)s, status = 'RUNNING', results_path = %(rp)s
             WHERE job_id = %(jid)s
-        """, {"rid": run_id, "jid": job_id})
+        """, {"rid": run_id, "jid": job_id, "rp": results_path})
 
         return {
             "job_id": job_id,
@@ -938,7 +938,7 @@ def _sync_job_status(job_id: int, databricks_run_id: int) -> str:
 
     # Fetch job info for model naming
     job_rows = execute_query(
-        "SELECT model_size, epochs, batch_size FROM training_jobs WHERE job_id = %(jid)s",
+        "SELECT model_size, epochs, batch_size, results_path FROM training_jobs WHERE job_id = %(jid)s",
         {"jid": job_id},
     )
     job_info = job_rows[0] if job_rows else {}
@@ -950,7 +950,8 @@ def _sync_job_status(job_id: int, databricks_run_id: int) -> str:
             new_status = "COMPLETED"
             # Try to parse training metrics
             try:
-                metrics = parse_training_results(f"{MODELS_VOLUME}/results_{databricks_run_id}")
+                rpath = job_info.get("results_path") or f"{MODELS_VOLUME}/results_{databricks_run_id}"
+                metrics = parse_training_results(rpath)
                 metrics_json = json.dumps(metrics)
                 execute_update("""
                     UPDATE training_jobs
@@ -1077,6 +1078,67 @@ async def list_trained_models(limit: int = Query(20), offset: int = Query(0)):
 
     total = execute_query("SELECT COUNT(*) as cnt FROM trained_models")
     return {"models": models, "total": total[0]["cnt"] if total else 0}
+
+
+@router.post("/jobs/{job_id}/publish")
+async def publish_job_model(job_id: int):
+    """Create a trained_model from a completed job and activate it."""
+    job = execute_query(
+        "SELECT * FROM training_jobs WHERE job_id = %(jid)s", {"jid": job_id})
+    if not job:
+        raise HTTPException(404, "Job not found")
+    job = job[0]
+    if job["status"] != "COMPLETED":
+        raise HTTPException(400, "Job not completed")
+
+    # Check if model already exists for this job
+    existing = execute_query(
+        "SELECT model_id FROM trained_models WHERE job_id = %(jid)s", {"jid": job_id})
+    if existing:
+        model_id = existing[0]["model_id"]
+    else:
+        # Try to parse metrics
+        metrics = {}
+        if job.get("metrics_json"):
+            try:
+                metrics = json.loads(job["metrics_json"])
+            except Exception:
+                pass
+
+        # If no metrics in DB, try to fetch from Volume
+        if not metrics and job.get("results_path"):
+            try:
+                from server.yolo_trainer import parse_training_results
+                metrics = parse_training_results(job["results_path"])
+                if metrics:
+                    execute_update(
+                        "UPDATE training_jobs SET metrics_json = %(mj)s WHERE job_id = %(jid)s",
+                        {"mj": json.dumps(metrics), "jid": job_id})
+            except Exception:
+                pass
+
+        model_id = int(time.time() * 1000)
+        model_path = metrics.get("best_model_path", f"{job.get('results_path', '')}/train/weights/best.pt")
+        execute_update("""
+            INSERT INTO trained_models
+            (model_id, job_id, model_name, model_path, map50, map50_95,
+             precision_val, recall_val, is_active, created_at)
+            VALUES (%(mid)s, %(jid)s, %(mn)s, %(mp)s, %(m50)s, %(m5095)s,
+                    %(prec)s, %(rec)s, FALSE, NOW())
+        """, {
+            "mid": model_id, "jid": job_id,
+            "mn": f"yolov8{job.get('model_size', '?')}_e{job.get('epochs', '?')}",
+            "mp": model_path,
+            "m50": metrics.get("map50", 0),
+            "m5095": metrics.get("map50_95", 0),
+            "prec": metrics.get("precision", 0),
+            "rec": metrics.get("recall", 0),
+        })
+
+    # Activate
+    execute_update("UPDATE trained_models SET is_active = FALSE")
+    execute_update("UPDATE trained_models SET is_active = TRUE WHERE model_id = %(mid)s", {"mid": model_id})
+    return {"model_id": model_id, "activated": True}
 
 
 @router.post("/models/{model_id}/activate")
