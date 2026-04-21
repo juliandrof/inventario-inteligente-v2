@@ -15,7 +15,7 @@ CATALOG = "jsf_demo_catalog"
 SCHEMA = "scenic_crawler"
 TRAINING_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/training_images"
 DATASET_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/yolo_datasets"
-MODELS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/trained_models"
+MODELS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/yolo_models"
 
 
 def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
