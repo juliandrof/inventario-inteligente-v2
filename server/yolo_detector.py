@@ -12,7 +12,7 @@ import os
 import threading
 from typing import Optional
 
-import cv2
+import cv2  # opencv-python-headless
 import numpy as np
 
 from server.database import execute_query, get_workspace_client

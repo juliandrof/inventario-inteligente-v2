@@ -1,7 +1,6 @@
 #!/bin/bash
-# Fix opencv: replace opencv-python with opencv-python-headless
-# (Databricks Apps containers lack libGL.so.1 needed by opencv-python)
-pip install --quiet --force-reinstall opencv-python-headless 2>/dev/null
-pip uninstall -y opencv-python 2>/dev/null || true
-
+# Fix: ultralytics installed opencv-python (needs libGL) in a previous deploy.
+# The venv is cached so pip won't replace it. Force swap to headless.
+pip uninstall -y opencv-python 2>/dev/null
+pip install -q opencv-python-headless 2>/dev/null
 exec uvicorn app:app --host 0.0.0.0 --port 8000

@@ -5,10 +5,5 @@ psycopg2-binary>=2.9.0
 pydantic>=2.0.0
 python-multipart>=0.0.9
 Pillow>=10.0.0
-# Use headless OpenCV - the Databricks Apps container has no libGL.so
-# so opencv-python (non-headless) will crash on import.
-# Listing headless FIRST and ultralytics AFTER ensures pip resolves correctly.
 opencv-python-headless>=4.9.0
-ultralytics>=8.2.0
-# Ensure the non-headless opencv is NOT installed (it conflicts with headless)
-# This line forces pip to recognize that opencv-python-headless satisfies opencv-python
+numpy>=1.24.0
