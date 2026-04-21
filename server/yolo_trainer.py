@@ -140,13 +140,17 @@ import subprocess, sys, json, os, shutil, zipfile
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow"])
 
-# Fix distributed training issue on Databricks single-node GPU clusters
+# Fix distributed training on Databricks - must happen before ANY torch import
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["WORLD_SIZE"] = "1"
+os.environ["RANK"] = "0"
+os.environ["LOCAL_RANK"] = "0"
 os.environ.pop("MASTER_ADDR", None)
 os.environ.pop("MASTER_PORT", None)
-os.environ.pop("WORLD_SIZE", None)
-os.environ.pop("RANK", None)
-os.environ.pop("LOCAL_RANK", None)
+
+import torch
+if torch.distributed.is_initialized():
+    torch.distributed.destroy_process_group()
 
 from ultralytics import YOLO
 import mlflow
@@ -192,11 +196,21 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
     mlflow.log_params({"model_size": MODEL_SIZE, "epochs": EPOCHS, "batch_size": BATCH_SIZE})
 
     model = YOLO(f"yolov8{MODEL_SIZE}.pt")
+
+    # Force single-GPU right before training (Databricks may re-set env vars)
+    os.environ.pop("MASTER_ADDR", None)
+    os.environ.pop("MASTER_PORT", None)
+    os.environ["WORLD_SIZE"] = "1"
+    os.environ["RANK"] = "0"
+    os.environ["LOCAL_RANK"] = "0"
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
+
     results = model.train(
         data=DATA_YAML, epochs=EPOCHS, batch=BATCH_SIZE,
         imgsz=640, project=LOCAL_RESULTS, name="train",
         exist_ok=True, verbose=True,
-        device=0, workers=0,
+        device="0", workers=0, single_cls=False,
     )
 
     metrics = {}
