@@ -36,6 +36,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+@app.get("/api/health")
+async def health():
+    """Health check endpoint for debugging."""
+    import sys
+    info = {"status": "ok", "python": sys.version}
+    try:
+        import cv2
+        info["cv2"] = cv2.__version__
+    except Exception as e:
+        info["cv2_error"] = str(e)
+    try:
+        from server.database import get_connection
+        conn = get_connection()
+        info["db"] = "connected"
+    except Exception as e:
+        info["db_error"] = str(e)
+    return info
+
 app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])

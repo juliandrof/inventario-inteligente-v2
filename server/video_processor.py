@@ -11,12 +11,14 @@ import tempfile
 import re
 from datetime import datetime
 
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 from server.database import execute_query, execute_update, get_workspace_client, get_config
 from server.fmapi import analyze_frame_fixtures
 from server.fixture_tracker import FixtureTracker
-from server.yolo_detector import detect_fixtures_yolo, detect_fixtures_hybrid
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ def _get_detection_function():
     - detect_fixtures_yolo    for 'YOLO'
     - detect_fixtures_hybrid  for 'HYBRID'
     """
+    from server.yolo_detector import detect_fixtures_yolo, detect_fixtures_hybrid
     mode = get_config("detection_mode", "LLM").upper().strip()
     if mode == "YOLO":
         logger.info("Detection mode: YOLO")
