@@ -16,11 +16,32 @@ import cv2
 from server.database import execute_query, execute_update, get_workspace_client, get_config
 from server.fmapi import analyze_frame_fixtures
 from server.fixture_tracker import FixtureTracker
+from server.yolo_detector import detect_fixtures_yolo, detect_fixtures_hybrid
 
 logger = logging.getLogger(__name__)
 
 THUMBNAIL_VOLUME = os.environ.get("THUMBNAIL_VOLUME", "/Volumes/scenic_crawler/default/thumbnails")
 VIDEO_VOLUME = os.environ.get("VIDEO_VOLUME", "/Volumes/scenic_crawler/default/uploaded_videos")
+
+
+def _get_detection_function():
+    """Return the appropriate detection function based on the configured detection_mode.
+
+    Reads the 'detection_mode' config key and returns:
+    - analyze_frame_fixtures  for 'LLM' (default)
+    - detect_fixtures_yolo    for 'YOLO'
+    - detect_fixtures_hybrid  for 'HYBRID'
+    """
+    mode = get_config("detection_mode", "LLM").upper().strip()
+    if mode == "YOLO":
+        logger.info("Detection mode: YOLO")
+        return detect_fixtures_yolo
+    elif mode == "HYBRID":
+        logger.info("Detection mode: HYBRID (YOLO + LLM)")
+        return detect_fixtures_hybrid
+    else:
+        logger.info("Detection mode: LLM")
+        return analyze_frame_fixtures
 
 
 def parse_video_filename(filename: str) -> dict:
@@ -121,6 +142,8 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
     confidence_threshold = float(get_config("confidence_threshold", "0.6"))
     dedup_threshold = float(get_config("dedup_position_threshold", "15"))
 
+    detect_fn = _get_detection_function()
+
     logger.info(f"[V{video_id}] Starting fixture detection: {local_path}")
     logger.info(f"[V{video_id}] Config: scan_fps={scan_fps}, confidence={confidence_threshold}, dedup={dedup_threshold}")
 
@@ -176,7 +199,7 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
             logger.info(f"[V{video_id}] Analyzing frame {analyzed_count+1}/{frames_to_analyze} at t={timestamp:.1f}s")
 
             try:
-                detections = analyze_frame_fixtures(frame_b64)
+                detections = detect_fn(frame_b64)
                 logger.info(f"[V{video_id}] Found {len(detections)} fixtures in frame")
             except Exception as e:
                 logger.error(f"[V{video_id}] Frame analysis error: {e}")
@@ -425,6 +448,8 @@ def process_photo(video_id: int, local_path: str, progress_callback=None):
 
     confidence_threshold = float(get_config("confidence_threshold", "0.6"))
 
+    detect_fn = _get_detection_function()
+
     logger.info(f"[P{video_id}] Starting photo analysis: {local_path}")
 
     execute_update("UPDATE videos SET status = 'PROCESSING', progress_pct = 0 WHERE video_id = %(vid)s", {"vid": video_id})
@@ -462,7 +487,7 @@ def process_photo(video_id: int, local_path: str, progress_callback=None):
 
     # Analyze
     try:
-        detections = analyze_frame_fixtures(frame_b64)
+        detections = detect_fn(frame_b64)
         logger.info(f"[P{video_id}] Found {len(detections)} fixtures")
     except Exception as e:
         logger.error(f"[P{video_id}] Analysis error: {e}")
