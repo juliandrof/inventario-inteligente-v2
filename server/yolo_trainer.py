@@ -140,17 +140,33 @@ import subprocess, sys, json, os, shutil, zipfile
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "ultralytics", "mlflow"])
 
-# Fix distributed training on Databricks - must happen before ANY torch import
+# Fix distributed training on Databricks GPU ML runtime
+# The runtime pre-initializes torch distributed which breaks YOLO single-GPU training
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["WORLD_SIZE"] = "1"
 os.environ["RANK"] = "0"
 os.environ["LOCAL_RANK"] = "0"
-os.environ.pop("MASTER_ADDR", None)
-os.environ.pop("MASTER_PORT", None)
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "29500"
 
 import torch
-if torch.distributed.is_initialized():
-    torch.distributed.destroy_process_group()
+import torch.distributed as dist
+
+# Initialize then destroy - this satisfies any code that checks is_initialized()
+# and then we operate in single-process mode
+try:
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl", world_size=1, rank=0)
+    dist.destroy_process_group()
+except Exception:
+    pass
+
+# Now clear all distributed env vars so YOLO doesn't try DDP
+os.environ.pop("MASTER_ADDR", None)
+os.environ.pop("MASTER_PORT", None)
+os.environ.pop("WORLD_SIZE", None)
+os.environ.pop("RANK", None)
+os.environ.pop("LOCAL_RANK", None)
 
 from ultralytics import YOLO
 import mlflow
@@ -197,14 +213,17 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
 
     model = YOLO(f"yolov8{MODEL_SIZE}.pt")
 
-    # Force single-GPU right before training (Databricks may re-set env vars)
+    # Ensure no DDP before training
     os.environ.pop("MASTER_ADDR", None)
     os.environ.pop("MASTER_PORT", None)
-    os.environ["WORLD_SIZE"] = "1"
-    os.environ["RANK"] = "0"
-    os.environ["LOCAL_RANK"] = "0"
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+    os.environ.pop("WORLD_SIZE", None)
+    os.environ.pop("RANK", None)
+    os.environ.pop("LOCAL_RANK", None)
+    try:
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception:
+        pass
 
     results = model.train(
         data=DATA_YAML, epochs=EPOCHS, batch=BATCH_SIZE,
