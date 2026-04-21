@@ -223,6 +223,12 @@ def _create_training_tables(conn):
     except Exception as e:
         logger.warning(f"ALTER source_group: {e}")
 
+    # Ensure results_path column exists on training_jobs
+    try:
+        cur.execute("ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS results_path VARCHAR(1000)")
+    except Exception as e:
+        logger.warning(f"ALTER results_path: {e}")
+
     # Ensure detection_mode config
     try:
         cur.execute("SELECT 1 FROM configurations WHERE config_key = 'detection_mode'")

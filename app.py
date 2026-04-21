@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Inventario Inteligente application...")
-    await init_db_pool()
+    try:
+        await init_db_pool()
+        logger.info("Database pool initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database pool: {e}", exc_info=True)
     yield
     logger.info("Shutting down Inventario Inteligente application...")
     await close_db_pool()
