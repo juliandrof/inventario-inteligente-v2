@@ -1,10 +1,6 @@
 command:
-  - uvicorn
-  - app:app
-  - --host
-  - 0.0.0.0
-  - --port
-  - "8000"
+  - bash
+  - start.sh
 env:
   - name: DBXSC_AI_DB_HOST
     value: "ep-restless-cake-d2jpldze.database.us-east-1.cloud.databricks.com"

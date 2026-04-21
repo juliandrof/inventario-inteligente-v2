@@ -82,11 +82,28 @@ def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
                 for ann in annotations:
                     cls_id = class_map.get(ann["fixture_type"])
                     if cls_id is None:
+                        logger.warning(f"Unknown fixture_type '{ann['fixture_type']}' in annotations, skipping")
                         continue
                     x_c = float(ann["x_center"]) / 100.0
                     y_c = float(ann["y_center"]) / 100.0
                     w_n = float(ann["width"]) / 100.0
                     h_n = float(ann["height"]) / 100.0
+
+                    # Validate YOLO coordinates are in valid range (0-1)
+                    if not (0 < x_c <= 1 and 0 < y_c <= 1 and 0 < w_n <= 1 and 0 < h_n <= 1):
+                        logger.warning(f"Skipping invalid annotation: x={x_c}, y={y_c}, w={w_n}, h={h_n}")
+                        continue
+
+                    # Clamp bbox to image boundaries
+                    x_min = max(0, x_c - w_n / 2)
+                    x_max = min(1, x_c + w_n / 2)
+                    y_min = max(0, y_c - h_n / 2)
+                    y_max = min(1, y_c + h_n / 2)
+                    w_n = x_max - x_min
+                    h_n = y_max - y_min
+                    x_c = x_min + w_n / 2
+                    y_c = y_min + h_n / 2
+
                     label_lines.append(f"{cls_id} {x_c:.6f} {y_c:.6f} {w_n:.6f} {h_n:.6f}")
 
                 label_fname = os.path.splitext(fname)[0] + ".txt"
@@ -102,6 +119,30 @@ def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
         )
         zf.writestr("data.yaml", data_yaml)
 
+    # Log dataset quality stats
+    ann_stats = execute_query("""
+        SELECT fixture_type, COUNT(*) as cnt,
+               ROUND(AVG(width)::numeric, 1) as avg_w,
+               ROUND(AVG(height)::numeric, 1) as avg_h
+        FROM training_annotations GROUP BY fixture_type ORDER BY cnt DESC
+    """)
+    total_anns = sum(r["cnt"] for r in ann_stats) if ann_stats else 0
+    logger.info(f"Dataset quality - {total_anns} annotations across {len(images)} images:")
+    for row in (ann_stats or []):
+        logger.info(f"  {row['fixture_type']}: {row['cnt']} anns, avg box {row['avg_w']}x{row['avg_h']}%")
+
+    # Check for suspicious uniform boxes (all same size = bad LLM annotations)
+    uniform_check = execute_query("""
+        SELECT COUNT(DISTINCT width || '_' || height) as distinct_sizes
+        FROM training_annotations
+    """)
+    if uniform_check and uniform_check[0]["distinct_sizes"] <= 1 and total_anns > 10:
+        logger.warning(
+            "WARNING: All annotations have identical bounding box sizes! "
+            "This indicates LLM auto-annotations did not include proper bbox dimensions. "
+            "Consider re-running auto-annotate to get varied, accurate box sizes."
+        )
+
     logger.info(f"Exporting YOLO dataset: {len(train_images)} train, {len(val_images)} val")
 
     # Upload ZIP to Volume
@@ -112,10 +153,6 @@ def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
     logger.info(f"YOLO dataset ZIP uploaded: {zip_path} ({zip_size_mb:.1f} MB)")
 
     return zip_path
-    _upload_bytes(f"{output_volume_path}/data.yaml", data_yaml.encode("utf-8"))
-
-    logger.info(f"YOLO dataset exported to {output_volume_path}")
-    return output_volume_path
 
 
 def generate_training_script(
@@ -238,6 +275,17 @@ with mlflow.start_run(run_name=f"yolov8{MODEL_SIZE}_e{EPOCHS}_b{BATCH_SIZE}") as
         imgsz=640, project=LOCAL_RESULTS, name="train",
         exist_ok=True, verbose=True,
         device="0", workers=0, single_cls=False,
+        # Patience for early stopping (avoid overfitting to noisy annotations)
+        patience=20,
+        # Learning rate tuned for fine-tuning with noisy LLM-generated annotations
+        lr0=0.001, lrf=0.01,
+        # Strong augmentation helps when annotations are imprecise
+        hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
+        degrees=5.0, translate=0.1, scale=0.5,
+        flipud=0.0, fliplr=0.5,
+        mosaic=1.0, mixup=0.1,
+        # Use a warmup to stabilize early training
+        warmup_epochs=5, warmup_momentum=0.5,
     )
 
     metrics = {}

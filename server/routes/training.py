@@ -645,9 +645,25 @@ async def auto_annotate_image(image_id: int):
     execute_update("DELETE FROM training_annotations WHERE image_id = %(iid)s", {"iid": image_id})
 
     # Convert FMAPI detections to annotation format and save
-    # FMAPI returns: {"type": "GONDOLA", "position": {"x": 30, "y": 50}, ...}
+    # FMAPI returns: {"type": "GONDOLA", "position": {"x": 30, "y": 50}, "bbox_w": 25, "bbox_h": 40, ...}
     # position.x and position.y are percentages (0-100) representing the CENTER
-    # We need to store as x_center, y_center (0-100) and estimate w, h
+    # bbox_w and bbox_h are percentages (0-100) representing bounding box size
+    # We store as x_center, y_center (0-100) and width, height (0-100)
+
+    # Type-specific fallback sizes (% of image) when LLM doesn't return bbox
+    _FALLBACK_SIZES = {
+        "GONDOLA":          (30, 50),
+        "ARARA":            (25, 45),
+        "PRATELEIRA":       (35, 30),
+        "BALCAO":           (30, 25),
+        "DISPLAY":          (15, 30),
+        "CESTAO":           (15, 20),
+        "CABIDEIRO_PAREDE": (20, 40),
+        "CHECKOUT":         (25, 25),
+        "MANEQUIM":         (10, 35),
+        "MESA":             (25, 20),
+    }
+
     annotations_created = 0
     for det in detections:
         pos = det.get("position", {})
@@ -655,9 +671,17 @@ async def auto_annotate_image(image_id: int):
         y_center = float(pos.get("y", 50))
         fixture_type = det.get("type", "UNKNOWN")
 
-        # Use bbox dimensions from FMAPI if available, otherwise fallback to 15%/20%
-        est_w = float(det.get("bbox_w", 0) or 0) or 15.0
-        est_h = float(det.get("bbox_h", 0) or 0) or 20.0
+        # Use bbox dimensions from FMAPI if available, otherwise use type-specific fallback
+        est_w = float(det.get("bbox_w", 0) or 0)
+        est_h = float(det.get("bbox_h", 0) or 0)
+        if est_w < 3 or est_h < 3:
+            fallback_w, fallback_h = _FALLBACK_SIZES.get(fixture_type, (20, 25))
+            est_w = est_w if est_w >= 3 else fallback_w
+            est_h = est_h if est_h >= 3 else fallback_h
+
+        # Clamp bbox so it doesn't exceed image boundaries
+        est_w = min(est_w, x_center * 2, (100 - x_center) * 2)
+        est_h = min(est_h, y_center * 2, (100 - y_center) * 2)
 
         ann_id = int(time.time() * 1000) + annotations_created
         execute_update("""
@@ -775,8 +799,8 @@ async def start_training_job(payload: StartJobPayload):
     valid_sizes = ("n", "s", "m", "l", "x")
     if payload.model_size not in valid_sizes:
         raise HTTPException(400, f"Invalid model_size. Must be one of: {valid_sizes}")
-    if payload.epochs < 1 or payload.epochs > 500:
-        raise HTTPException(400, "Epochs must be between 1 and 500")
+    if payload.epochs < 30 or payload.epochs > 500:
+        raise HTTPException(400, "Epochs must be between 30 and 500 (minimum 30 for meaningful training)")
     if payload.batch_size < 1 or payload.batch_size > 128:
         raise HTTPException(400, "Batch size must be between 1 and 128")
 

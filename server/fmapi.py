@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MODEL = os.environ.get("FMAPI_MODEL", "databricks-llama-4-maverick")
 
 _DEFAULT_FIXTURE_TYPES = [
-    "ARARA", "GONDOLA", "CESTAO", "PRATELEIRA", "BALCAO",
-    "DISPLAY", "CHECKOUT", "MANEQUIM", "MESA", "CABIDEIRO_PAREDE",
+    "ARARA", "BALCAO", "CABIDEIRO_PAREDE", "CESTAO",
+    "DISPLAY", "GONDOLA", "PRATELEIRA",
 ]
 
 
@@ -115,9 +115,13 @@ INSTRUCOES DE DETECCAO:
 3. Para cada um, determine a posicao do CENTRO do objeto como percentual da imagem:
    - "x": 0 = borda esquerda, 100 = borda direita
    - "y": 0 = topo, 100 = base
-4. Dois objetos do MESMO tipo so devem ser reportados separados se estao FISICAMENTE separados (distancia visivel entre eles)
-5. Se um expositor esta parcialmente cortado na borda, reporte apenas se >30% esta visivel
-6. NAO reporte o mesmo expositor mais de uma vez
+4. Para cada um, estime a LARGURA e ALTURA do bounding box como percentual da imagem:
+   - "bbox_w": largura do objeto como % da largura total da imagem (ex: gondola grande = 30-50, display pequeno = 10-20)
+   - "bbox_h": altura do objeto como % da altura total da imagem (ex: gondola alta = 40-70, mesa baixa = 15-30)
+   - Os valores devem refletir o tamanho REAL do objeto na imagem, nao um valor fixo
+5. Dois objetos do MESMO tipo so devem ser reportados separados se estao FISICAMENTE separados (distancia visivel entre eles)
+6. Se um expositor esta parcialmente cortado na borda, reporte apenas se >30% esta visivel
+7. NAO reporte o mesmo expositor mais de uma vez
 
 CRITERIOS DE CONFIANCA:
 - >= 0.8: certeza alta de que e esse tipo
@@ -125,7 +129,7 @@ CRITERIOS DE CONFIANCA:
 - < 0.6: NAO reporte
 
 FORMATO (array JSON):
-[{{"type": "TIPO", "position": {{"x": 35, "y": 48}}, "zone": "FRENTE|MEIO|FUNDO|ESQUERDA|DIREITA", "occupancy": "VAZIO|PARCIAL|CHEIO", "occupancy_pct": 75, "confidence": 0.92, "description": "descricao breve em portugues"}}]
+[{{"type": "TIPO", "position": {{"x": 35, "y": 48}}, "bbox_w": 25, "bbox_h": 40, "zone": "FRENTE|MEIO|FUNDO|ESQUERDA|DIREITA", "occupancy": "VAZIO|PARCIAL|CHEIO", "occupancy_pct": 75, "confidence": 0.92, "description": "descricao breve em portugues"}}]
 
 Tipos validos: {types_str}
 Se nao encontrar nenhum expositor, retorne []"""
@@ -184,12 +188,23 @@ Se nao encontrar nenhum expositor, retorne []"""
             if not isinstance(pos, dict):
                 pos = {"x": 50, "y": 50}
 
+            # Extract bounding box dimensions (percentage of image)
+            bbox_w = float(f.get("bbox_w", 0) or 0)
+            bbox_h = float(f.get("bbox_h", 0) or 0)
+            # Clamp to reasonable range (3-90% of image)
+            if bbox_w > 0:
+                bbox_w = max(3, min(90, bbox_w))
+            if bbox_h > 0:
+                bbox_h = max(3, min(90, bbox_h))
+
             valid.append({
                 "type": ftype,
                 "position": {
                     "x": max(0, min(100, float(pos.get("x", 50)))),
                     "y": max(0, min(100, float(pos.get("y", 50)))),
                 },
+                "bbox_w": bbox_w,
+                "bbox_h": bbox_h,
                 "zone": str(f.get("zone", "MEIO")).upper(),
                 "occupancy": _normalize_occupancy(f.get("occupancy", "PARCIAL")),
                 "occupancy_pct": max(0, min(100, float(f.get("occupancy_pct", 50)))),

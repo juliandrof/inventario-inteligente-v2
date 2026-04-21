@@ -49,10 +49,12 @@ def _get_class_names() -> list[str]:
     except Exception as e:
         logger.warning(f"Failed to load fixture_types from DB: {e}")
 
-    # Fallback - same order as seeded in database.py
+    # Fallback - must match fixture_types table ORDER BY name
+    # IMPORTANT: This must stay in sync with the DB. If you add types to
+    # fixture_types, add them here too in alphabetical order.
     return [
-        "ARARA", "BALCAO", "CABIDEIRO_PAREDE", "CESTAO", "CHECKOUT",
-        "DISPLAY", "GONDOLA", "MANEQUIM", "MESA", "PRATELEIRA",
+        "ARARA", "BALCAO", "CABIDEIRO_PAREDE", "CESTAO",
+        "DISPLAY", "GONDOLA", "PRATELEIRA",
     ]
 
 
@@ -163,8 +165,8 @@ def detect_fixtures_yolo(frame_b64: str) -> list[dict]:
         img_h, img_w = frame.shape[:2]
         class_names = _get_class_names()
 
-        # Run inference (CPU)
-        results = model(frame, conf=0.25, verbose=False)
+        # Run inference - lower threshold for custom-trained models on limited data
+        results = model(frame, conf=0.15, iou=0.45, verbose=False)
 
         detections = []
         for result in results:
@@ -235,8 +237,8 @@ def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
         img_h, img_w = frame.shape[:2]
         class_names = _get_class_names()
 
-        # Run YOLO inference
-        results = model(frame, conf=0.25, verbose=False)
+        # Run YOLO inference - lower threshold for custom-trained models
+        results = model(frame, conf=0.15, iou=0.45, verbose=False)
 
         yolo_detections = []
         for result in results:

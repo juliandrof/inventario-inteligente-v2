@@ -683,14 +683,15 @@ function TrainingTab() {
             </div>
             <input
               type="range"
-              min="10"
+              min="30"
               max="300"
+              step="10"
               value={epochs}
               onChange={e => setEpochs(Number(e.target.value))}
               className="training-slider"
             />
             <div className="training-slider-labels">
-              <span>10</span>
+              <span>30</span>
               <span>100</span>
               <span>200</span>
               <span>300</span>
