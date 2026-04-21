@@ -67,6 +67,7 @@ def create_training_tables(conn):
                 width INT,
                 height INT,
                 annotation_count INT DEFAULT 0,
+                source_group VARCHAR(500),
                 uploaded_at TIMESTAMP DEFAULT NOW()
             )
         """),
@@ -120,6 +121,16 @@ def create_training_tables(conn):
         except Exception as e:
             logger.warning(f"Create training table [{label}]: {e}")
 
+    # Ensure columns exist (for tables created before these columns were added)
+    for alter_sql in [
+        "ALTER TABLE training_images ADD COLUMN IF NOT EXISTS source_group VARCHAR(500)",
+        "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS results_path VARCHAR(1000)",
+    ]:
+        try:
+            cur.execute(alter_sql)
+        except Exception as e:
+            logger.warning(f"ALTER: {e}")
+
     # Indexes
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_training_ann_image ON training_annotations(image_id)",
@@ -169,8 +180,6 @@ _ensure_tables()
 async def upload_training_image(file: UploadFile = File(...)):
     """Upload a training image (or video, extracting 1 frame/sec) to Volume."""
     import io
-    import cv2
-    import numpy as np
     from PIL import Image as PILImage
 
     filename = file.filename or f"image_{int(time.time() * 1000)}.jpg"
@@ -184,6 +193,7 @@ async def upload_training_image(file: UploadFile = File(...)):
 
     if ext in video_exts:
         # --- Video: extract frames at 1 fps ---
+        import cv2
         tmp_video = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         try:
             tmp_video.write(content)
