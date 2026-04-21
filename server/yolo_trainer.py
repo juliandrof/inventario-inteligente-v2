@@ -168,8 +168,16 @@ os.environ.pop("WORLD_SIZE", None)
 os.environ.pop("RANK", None)
 os.environ.pop("LOCAL_RANK", None)
 
-from ultralytics import YOLO
 import mlflow
+
+# Disable Ultralytics auto-MLflow logging (conflicts with Databricks MLflow)
+os.environ["WANDB_DISABLED"] = "true"
+os.environ["CLEARML_LOG_MODEL"] = "false"
+
+from ultralytics import YOLO
+from ultralytics import settings as ul_settings
+ul_settings.update({"mlflow": False, "wandb": False, "clearml": False, "comet": False})
+
 from databricks.sdk import WorkspaceClient
 
 DATASET_ZIP = "__DATASET_PATH__"
