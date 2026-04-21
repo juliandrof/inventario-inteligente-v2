@@ -358,6 +358,13 @@ def submit_training_job(
             "num_workers": 0,
             "node_type_id": "g5.xlarge",
             "driver_node_type_id": "g5.xlarge",
+            "spark_conf": {
+                "spark.master": "local[*]",
+                "spark.databricks.cluster.profile": "singleNode",
+            },
+            "custom_tags": {
+                "ResourceClass": "SingleNode",
+            },
         }
 
     # Upload script to DBFS (the only reliable path for spark_python_task)
