@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { fetchConfigs, updateConfig, fetchBranding, updateBranding, uploadLogo, clearAllData, fetchConfigFixtureTypes, createFixtureType, updateFixtureType, deleteFixtureType, fetchServingEndpoints } from '../api';
+import { fetchConfigs, updateConfig, fetchBranding, updateBranding, uploadLogo, clearAllData, fetchConfigFixtureTypes, createFixtureType, updateFixtureType, deleteFixtureType } from '../api';
 
 const CONFIG_HELP = {
   fmapi_model: 'O nome do Serving Endpoint que sera usado para analisar os frames do video. Pode ser um modelo padrao da Databricks (ex: databricks-llama-4-maverick) ou um modelo treinado por voce e publicado como endpoint.',
@@ -20,31 +20,19 @@ function Settings() {
   const [editFT, setEditFT] = useState(null);
   const [newFT, setNewFT] = useState({ name: '', display_name: '', description: '', color: '#666666' });
   const [showAddFT, setShowAddFT] = useState(false);
-  const [servingEndpoints, setServingEndpoints] = useState([]);
-  const [modelMode, setModelMode] = useState('select'); // 'select' or 'custom'
-  const [customModel, setCustomModel] = useState('');
   const [showHelp, setShowHelp] = useState(null);
 
   useEffect(() => {
     fetchConfigs().then(setConfigs).catch(() => {});
     fetchBranding().then(setBranding).catch(() => {});
     fetchConfigFixtureTypes().then(setFixtureTypes).catch(() => {});
-    fetchServingEndpoints().then(setServingEndpoints).catch(() => {});
   }, []);
-
-  const currentModel = configs.find(c => c.config_key === 'fmapi_model')?.config_value || '';
 
   async function saveConfig(key) {
     await updateConfig(key, editVal);
     setConfigs(c => c.map(x => x.config_key === key ? { ...x, config_value: editVal } : x));
     setEditKey(null);
     flash(`Configuracao "${key}" atualizada!`);
-  }
-
-  async function saveModel(value) {
-    await updateConfig('fmapi_model', value);
-    setConfigs(c => c.map(x => x.config_key === 'fmapi_model' ? { ...x, config_value: value } : x));
-    flash(`Modelo atualizado para "${value}"`);
   }
 
   async function saveBranding(key, val) {
@@ -92,7 +80,6 @@ function Settings() {
   function flash(m) { setMsg(m); setTimeout(() => setMsg(''), 4000); }
 
   const CONFIG_LABELS = {
-    fmapi_model: 'Modelo de Visao',
     scan_fps: 'Frames/segundo para analise',
     confidence_threshold: 'Confianca minima (0-1)',
     dedup_position_threshold: 'Distancia dedup (%)',
@@ -100,8 +87,8 @@ function Settings() {
     timezone: 'Timezone',
   };
 
-  // Separate model config from other configs
-  const otherConfigs = configs.filter(c => c.config_key !== 'fmapi_model');
+  // Filter out configs managed by Upload wizard
+  const otherConfigs = configs.filter(c => !['fmapi_model', 'detection_mode'].includes(c.config_key));
 
   return (
     <div className="page">
@@ -178,68 +165,6 @@ function Settings() {
         <p style={{ fontSize: 11, color: '#999', marginTop: 12 }}>
           A descricao de cada tipo e enviada ao modelo de IA para orientar a deteccao. Seja especifico.
         </p>
-      </div>
-
-      {/* Model Selection */}
-      <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-          <h3 style={{ margin: 0 }}>Modelo de Visao (IA)</h3>
-          <InfoIcon text={CONFIG_HELP.fmapi_model} show={showHelp === 'model'} onToggle={() => setShowHelp(showHelp === 'model' ? null : 'model')} />
-        </div>
-        <p style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-          Modelo atual: <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: 4 }}>{currentModel || 'nao definido'}</code>
-        </p>
-        <div className="model-selector">
-          <div className="model-tabs">
-            <button className={`tab ${modelMode === 'select' ? 'active' : ''}`} onClick={() => setModelMode('select')}>
-              Endpoints Disponiveis
-            </button>
-            <button className={`tab ${modelMode === 'custom' ? 'active' : ''}`} onClick={() => setModelMode('custom')}>
-              Modelo Personalizado
-            </button>
-          </div>
-
-          {modelMode === 'select' && (
-            <div className="model-endpoint-list">
-              {servingEndpoints.length === 0 && <div className="empty-state">Buscando endpoints com suporte a visao...</div>}
-              {servingEndpoints.map(ep => (
-                <div key={ep.name} className={`model-endpoint-item ${ep.name === currentModel ? 'selected' : ''}`}
-                  onClick={() => saveModel(ep.name)}>
-                  <div className="model-ep-info">
-                    <div className="model-ep-name">
-                      <span className={`model-ep-dot ${ep.state === 'READY' ? 'ready' : ''}`} />
-                      <strong>{ep.display_name || ep.name}</strong>
-                      {ep.is_custom && <span className="model-ep-custom">CUSTOM</span>}
-                    </div>
-                    <div className="model-ep-endpoint">{ep.name}</div>
-                    {ep.description && <div className="model-ep-desc">{ep.description}</div>}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                    <div className="model-ep-state">{ep.state}</div>
-                    {ep.name === currentModel && <span className="model-ep-active">ATIVO</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {modelMode === 'custom' && (
-            <div className="model-custom">
-              <p style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
-                Digite o nome do serving endpoint do seu modelo treinado:
-              </p>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input className="inline-input" style={{ flex: 1, fontSize: 14 }}
-                  placeholder="ex: meu-modelo-fixture-v2"
-                  value={customModel} onChange={e => setCustomModel(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && customModel && saveModel(customModel)} />
-                <button className="btn btn-primary" disabled={!customModel} onClick={() => { saveModel(customModel); setCustomModel(''); }}>
-                  Salvar
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Analysis Config */}

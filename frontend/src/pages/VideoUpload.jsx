@@ -21,6 +21,8 @@ function VideoUpload({ navigate }) {
   // Step 2 state
   const [detectionMode, setDetectionModeLocal] = useState('LLM');
   const [selectedLLM, setSelectedLLM] = useState('');
+  const [customEndpoint, setCustomEndpoint] = useState('');
+  const [useCustom, setUseCustom] = useState(false);
   const [endpoints, setEndpoints] = useState([]);
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [yoloModels, setYoloModels] = useState([]);
@@ -83,9 +85,11 @@ function VideoUpload({ navigate }) {
     setStep(2);
   };
 
+  const effectiveLLM = useCustom ? customEndpoint : selectedLLM;
+
   const canProcess = () => {
-    if (detectionMode === 'LLM' || detectionMode === 'HYBRID') return !!selectedLLM;
-    if (detectionMode === 'YOLO' || detectionMode === 'HYBRID') return yoloModels.some(m => m.is_active);
+    if (detectionMode === 'YOLO') return yoloModels.some(m => m.is_active);
+    if (detectionMode === 'LLM' || detectionMode === 'HYBRID') return !!effectiveLLM;
     return true;
   };
 
@@ -100,8 +104,8 @@ function VideoUpload({ navigate }) {
       await setDetectionMode(detectionMode);
 
       // Save LLM model if applicable
-      if ((detectionMode === 'LLM' || detectionMode === 'HYBRID') && selectedLLM) {
-        await updateConfig('fmapi_model', selectedLLM, 'Serving endpoint do modelo de visao');
+      if ((detectionMode === 'LLM' || detectionMode === 'HYBRID') && effectiveLLM) {
+        await updateConfig('fmapi_model', effectiveLLM, 'Serving endpoint do modelo de visao');
       }
 
       // Upload files
@@ -255,35 +259,60 @@ function VideoUpload({ navigate }) {
           {/* LLM Model selection */}
           {(detectionMode === 'LLM' || detectionMode === 'HYBRID') && (
             <div className="card">
-              <h3>Escolha o modelo LLM</h3>
-              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
-                Modelos multimodais disponiveis no seu workspace Databricks.
-              </p>
-              {loadingEndpoints ? (
-                <div className="empty-state">Carregando modelos do Databricks...</div>
-              ) : endpoints.length === 0 ? (
-                <div className="empty-state">Nenhum serving endpoint multimodal encontrado.</div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-                  {endpoints.filter(ep => ep.state === 'READY' || ep.state === true).map(ep => (
-                    <div
-                      key={ep.name}
-                      onClick={() => setSelectedLLM(ep.name)}
-                      style={{
-                        padding: '14px 16px', borderRadius: 10, cursor: 'pointer',
-                        border: selectedLLM === ep.name ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
-                        background: selectedLLM === ep.name ? '#FFF1F2' : '#fff',
-                        transition: 'all 0.15s',
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{ep.display_name || ep.name}</div>
-                      <div style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'monospace' }}>{ep.name}</div>
-                      {ep.description && <div style={{ fontSize: 11, color: '#6B7280', marginTop: 6, lineHeight: 1.4 }}>{ep.description}</div>}
-                      {selectedLLM === ep.name && (
-                        <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
-                      )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <h3 style={{ margin: 0 }}>Escolha o modelo LLM</h3>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className={`tab ${!useCustom ? 'active' : ''}`} onClick={() => setUseCustom(false)} style={{ fontSize: 12, padding: '4px 12px' }}>
+                    Endpoints Databricks
+                  </button>
+                  <button className={`tab ${useCustom ? 'active' : ''}`} onClick={() => setUseCustom(true)} style={{ fontSize: 12, padding: '4px 12px' }}>
+                    Personalizado
+                  </button>
+                </div>
+              </div>
+
+              {!useCustom ? (
+                <>
+                  {loadingEndpoints ? (
+                    <div className="empty-state">Carregando modelos do Databricks...</div>
+                  ) : endpoints.length === 0 ? (
+                    <div className="empty-state">Nenhum serving endpoint multimodal encontrado.</div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+                      {endpoints.filter(ep => ep.state === 'READY' || ep.state === true).map(ep => (
+                        <div
+                          key={ep.name}
+                          onClick={() => { setSelectedLLM(ep.name); setUseCustom(false); }}
+                          style={{
+                            padding: '14px 16px', borderRadius: 10, cursor: 'pointer',
+                            border: selectedLLM === ep.name && !useCustom ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                            background: selectedLLM === ep.name && !useCustom ? '#FFF1F2' : '#fff',
+                            transition: 'all 0.15s',
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{ep.display_name || ep.name}</div>
+                          <div style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'monospace' }}>{ep.name}</div>
+                          {ep.description && <div style={{ fontSize: 11, color: '#6B7280', marginTop: 6, lineHeight: 1.4 }}>{ep.description}</div>}
+                          {selectedLLM === ep.name && !useCustom && (
+                            <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+                </>
+              ) : (
+                <div>
+                  <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 12 }}>
+                    Digite o nome do serving endpoint do seu modelo personalizado:
+                  </p>
+                  <input
+                    className="inline-input"
+                    style={{ width: '100%', fontSize: 14, padding: '10px 14px' }}
+                    placeholder="ex: meu-modelo-visao-v2"
+                    value={customEndpoint}
+                    onChange={e => setCustomEndpoint(e.target.value)}
+                  />
                 </div>
               )}
             </div>
@@ -337,7 +366,7 @@ function VideoUpload({ navigate }) {
               <h3>Upload concluido!</h3>
               <p style={{ color: '#6B7280', fontSize: 13, marginBottom: 16 }}>
                 Modo: <strong>{detectionMode}</strong>
-                {selectedLLM && <> | Modelo: <strong>{selectedLLM}</strong></>}
+                {effectiveLLM && <> | Modelo: <strong>{effectiveLLM}</strong></>}
               </p>
               <div style={{ textAlign: 'left', maxWidth: 500, margin: '0 auto' }}>
                 {results.map((r, i) => (
