@@ -8,6 +8,7 @@ import {
   fetchUCModels, activateUCModel, deleteUCModel,
   fetchConfigFixtureTypes,
   fetchContexts, fetchContextObjectTypes,
+  fetchServingEndpoints, updateConfig,
 } from '../api';
 import { TYPE_COLORS, updateTypeColors } from './Dashboard';
 import AnnotationEditor from './AnnotationEditor';
@@ -38,6 +39,7 @@ function Training() {
   const [fixtureTypes, setFixtureTypes] = useState([]);
   const [contexts, setContexts] = useState([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     fetchConfigFixtureTypes().then(types => {
@@ -49,6 +51,7 @@ function Training() {
 
   const handleWizardClose = () => {
     setShowWizard(false);
+    setRefreshKey(k => k + 1);
   };
 
   return (
@@ -70,7 +73,7 @@ function Training() {
         ))}
       </div>
 
-      {tab === 'datasets' && <DatasetsTab fixtureTypes={fixtureTypes} contexts={contexts} />}
+      {tab === 'datasets' && <DatasetsTab key={refreshKey} fixtureTypes={fixtureTypes} contexts={contexts} />}
       {tab === 'models' && <ModelsTab />}
 
       {showWizard && (
@@ -96,7 +99,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
   // Step 1: Context
   const [selectedContext, setSelectedContext] = useState(null);
 
-  // Step 2: Upload
+  // Step 2: Upload + frame interval
   const [files, setFiles] = useState([]);
   const [frameInterval, setFrameInterval] = useState(2);
   const [uploading, setUploading] = useState(false);
@@ -105,7 +108,14 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
   const fileRef = useRef();
   const [dragOver, setDragOver] = useState(false);
 
-  // Step 3: Annotate
+  // Step 3: AI Model selection
+  const [endpoints, setEndpoints] = useState([]);
+  const [loadingEndpoints, setLoadingEndpoints] = useState(false);
+  const [selectedLLM, setSelectedLLM] = useState('');
+  const [useCustom, setUseCustom] = useState(false);
+  const [customEndpoint, setCustomEndpoint] = useState('');
+
+  // Step 4: Annotate (auto + review)
   const [frames, setFrames] = useState([]);
   const [loadingFrames, setLoadingFrames] = useState(false);
   const [annotatingImage, setAnnotatingImage] = useState(null);
@@ -128,6 +138,16 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
     }
   }, [selectedContext, setFixtureTypes]);
 
+  // Load endpoints when entering step 3
+  useEffect(() => {
+    if (step !== 3) return;
+    setLoadingEndpoints(true);
+    fetchServingEndpoints()
+      .then(eps => setEndpoints(eps || []))
+      .catch(() => setEndpoints([]))
+      .finally(() => setLoadingEndpoints(false));
+  }, [step]);
+
   const goToStep2 = () => {
     if (!selectedContext) { setError('Selecione um contexto'); return; }
     setError(null);
@@ -144,12 +164,25 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
 
   const removeFile = (idx) => setFiles(f => f.filter((_, i) => i !== idx));
 
-  const handleUpload = async () => {
+  const goToStep3 = () => {
     if (files.length === 0) { setError('Adicione pelo menos um arquivo'); return; }
+    setError(null);
+    setStep(3);
+  };
+
+  const effectiveLLM = useCustom ? customEndpoint : selectedLLM;
+
+  const handleUploadAndAnnotate = async () => {
+    if (!effectiveLLM) { setError('Selecione um modelo de IA'); return; }
     setUploading(true);
     setError(null);
     const groups = [];
     try {
+      // Save LLM model config
+      setUploadProgress('Configurando modelo de IA...');
+      await updateConfig('fmapi_model', effectiveLLM, 'Serving endpoint do modelo de visao');
+
+      // Upload files
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         setUploadProgress(`Processando ${f.name} (${i + 1}/${files.length})...`);
@@ -160,9 +193,12 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
         }
       }
       setUploadedGroups(groups);
-      setStep(3);
-      // Load frames for the first uploaded group
+      setStep(4);
+
+      // Auto-annotate immediately
+      setUploadProgress('');
       loadAllFrames(groups);
+      startAutoAnnotate(groups);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -184,9 +220,9 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
     setLoadingFrames(false);
   };
 
-  const handleAutoAnnotateAll = async () => {
-    if (uploadedGroups.length === 0) return;
-    const sourceName = uploadedGroups[0];
+  const startAutoAnnotate = async (groups) => {
+    if (groups.length === 0) return;
+    const sourceName = groups[0];
     setAutoAnnotatingGroup(sourceName);
     setAnnotateProgress(null);
     try {
@@ -201,7 +237,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
             setAnnotateProgress(null);
             setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
             setTimeout(() => setSuccessMsg(null), 6000);
-            loadAllFrames(uploadedGroups);
+            loadAllFrames(groups);
           }
         } catch (_) { /* keep polling */ }
       }, 2000);
@@ -270,7 +306,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
           <div>
             <h2 style={{ margin: 0 }}>Novo Treinamento</h2>
             <div style={{ display: 'flex', gap: 24, marginTop: 12 }}>
-              {[{ n: 1, l: 'Contexto' }, { n: 2, l: 'Upload' }, { n: 3, l: 'Anotacoes' }].map(s => (
+              {[{ n: 1, l: 'Contexto' }, { n: 2, l: 'Upload' }, { n: 3, l: 'Modelo IA' }, { n: 4, l: 'Revisar' }].map(s => (
                 <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: step >= s.n ? 1 : 0.4 }}>
                   <div style={{
                     width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -376,21 +412,81 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
             </>
           )}
 
-          {/* STEP 3: Annotate */}
+          {/* STEP 3: AI Model selection */}
           {step === 3 && (
             <>
-              <h3 style={{ margin: '0 0 8px' }}>Anotacoes do Dataset</h3>
-              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
-                Anote os frames manualmente ou use a IA para auto-anotar. Exclua frames desnecessarios.
-              </p>
+              <h3 style={{ margin: '0 0 8px' }}>Modelo de IA para auto-anotacao</h3>
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>Selecione o modelo LLM que ira anotar automaticamente os frames do dataset.</p>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className={`tab ${!useCustom ? 'active' : ''}`} onClick={() => setUseCustom(false)} style={{ fontSize: 12, padding: '4px 12px' }}>
+                    Endpoints Databricks
+                  </button>
+                  <button className={`tab ${useCustom ? 'active' : ''}`} onClick={() => setUseCustom(true)} style={{ fontSize: 12, padding: '4px 12px' }}>
+                    Personalizado
+                  </button>
+                </div>
+              </div>
+
+              {!useCustom ? (
+                <>
+                  {loadingEndpoints ? (
+                    <div className="empty-state">Carregando modelos do Databricks...</div>
+                  ) : endpoints.length === 0 ? (
+                    <div className="empty-state">Nenhum serving endpoint encontrado.</div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+                      {endpoints.filter(ep => ep.state === 'READY' || ep.state === true).map(ep => (
+                        <div key={ep.name} onClick={() => { setSelectedLLM(ep.name); setUseCustom(false); }}
+                          style={{
+                            padding: '14px 16px', borderRadius: 10, cursor: 'pointer',
+                            border: selectedLLM === ep.name && !useCustom ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                            background: selectedLLM === ep.name && !useCustom ? '#FFF1F2' : '#fff',
+                            transition: 'all 0.15s',
+                          }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{ep.display_name || ep.name}</div>
+                          <div style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'monospace' }}>{ep.name}</div>
+                          {ep.description && <div style={{ fontSize: 11, color: '#6B7280', marginTop: 6, lineHeight: 1.4 }}>{ep.description}</div>}
+                          {selectedLLM === ep.name && !useCustom && (
+                            <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div>
+                  <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 12 }}>Digite o nome do serving endpoint personalizado:</p>
+                  <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px' }}
+                    placeholder="ex: meu-modelo-visao-v2" value={customEndpoint}
+                    onChange={e => setCustomEndpoint(e.target.value)} />
+                </div>
+              )}
+            </>
+          )}
+
+          {/* STEP 4: Review annotations */}
+          {step === 4 && (
+            <>
+              <h3 style={{ margin: '0 0 8px' }}>Revisar Anotacoes</h3>
+              {autoAnnotatingGroup ? (
+                <div style={{ background: '#FFF7ED', borderLeft: '4px solid #F59E0B', padding: '12px 16px', borderRadius: 8, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="training-progress-bar-track" style={{ flex: 1 }}>
+                    <div className="training-progress-bar-fill" style={{ width: annotateProgress ? `${(annotateProgress.done / annotateProgress.total) * 100}%` : '10%', transition: 'width 0.3s' }} />
+                  </div>
+                  <span style={{ fontSize: 13, color: '#92400E', whiteSpace: 'nowrap' }}>
+                    {annotateProgress ? `Anotando com IA: ${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando auto-anotacao...'}
+                  </span>
+                </div>
+              ) : (
+                <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
+                  Revise as anotacoes geradas pela IA. Corrija ou exclua frames desnecessarios.
+                </p>
+              )}
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-                <button className="btn btn-primary" onClick={handleAutoAnnotateAll}
-                  disabled={!!autoAnnotatingGroup}>
-                  {autoAnnotatingGroup
-                    ? (annotateProgress ? `Anotando ${annotateProgress.done}/${annotateProgress.total}...` : 'Iniciando...')
-                    : 'Auto-anotar todos com IA'}
-                </button>
                 <button className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => { setSelectMode(!selectMode); setSelectedFrames(new Set()); }}>
                   {selectMode ? 'Cancelar selecao' : 'Selecionar frames'}
@@ -435,8 +531,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
                       </div>
                       {!selectMode && (
                         <div className="training-frame-actions">
-                          <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
-                          <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
+                          <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Revisar</button>
                         </div>
                       )}
                     </div>
@@ -450,19 +545,20 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
         {/* Footer */}
         <div style={{ padding: '16px 24px', borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
           <div>
-            {step > 1 && step < 3 && (
+            {step > 1 && step < 4 && (
               <button className="btn btn-secondary" onClick={() => setStep(step - 1)}>Voltar</button>
             )}
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
             {step === 1 && <button className="btn btn-primary" onClick={goToStep2}>Proximo</button>}
-            {step === 2 && (
-              <button className="btn btn-primary" onClick={handleUpload} disabled={uploading || files.length === 0}>
-                {uploading ? 'Enviando...' : 'Enviar e Anotar'}
+            {step === 2 && <button className="btn btn-primary" onClick={goToStep3} disabled={files.length === 0}>Proximo</button>}
+            {step === 3 && (
+              <button className="btn btn-primary" onClick={handleUploadAndAnnotate} disabled={uploading || !effectiveLLM}>
+                {uploading ? (uploadProgress || 'Enviando...') : 'Enviar e Auto-anotar'}
               </button>
             )}
-            {step === 3 && <button className="btn btn-primary" onClick={onClose}>Concluir</button>}
+            {step === 4 && <button className="btn btn-primary" onClick={onClose}>Concluir</button>}
           </div>
         </div>
       </div>
@@ -808,13 +904,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       )}
 
       {/* Dataset groups */}
-      <div className="card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h3 style={{ margin: 0 }}>Datasets</h3>
-        <button className="btn btn-primary btn-sm" onClick={openTrainModal}
-          disabled={!groups.length || !groups.some(g => g.total_annotations > 0)}>
-          Treinar Modelo
-        </button>
-      </div>
+      <h3 style={{ margin: '16px 0 8px' }}>Datasets</h3>
 
       {loading ? (
         <div className="empty-state">Carregando...</div>
@@ -844,13 +934,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                         </button>
                       )}
                       <button className="btn btn-sm btn-primary" onClick={() => handleOpenGroup(g.source_name)}>
-                        {openGroup === g.source_name ? 'Fechar' : 'Anotar'}
-                      </button>
-                      <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
-                        onClick={() => handleAutoAnnotateGroup(g.source_name)}>
-                        {autoAnnotatingGroup === g.source_name
-                          ? (annotateProgress ? `${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando...')
-                          : 'Auto-anotar IA'}
+                        {openGroup === g.source_name ? 'Fechar' : 'Revisar anotacoes'}
                       </button>
                       <button className="btn btn-sm btn-danger" onClick={() => handleDeleteGroup(g.source_name)}>Excluir</button>
                     </>
@@ -915,8 +999,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                             </div>
                             {!selectMode && (
                               <div className="training-frame-actions">
-                                <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
-                                <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
+                                <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Revisar</button>
                               </div>
                             )}
                           </div>
@@ -932,9 +1015,17 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       )}
 
       {/* Training Jobs */}
-      {jobs.length > 0 && (
-        <div style={{ marginTop: 24 }}>
-          <h3>Treinamentos</h3>
+      <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>Treinamentos</h3>
+        <button className="btn btn-primary" onClick={openTrainModal}
+          disabled={!groups.length || !groups.some(g => g.total_annotations > 0)}>
+          Treinar Modelo
+        </button>
+      </div>
+      {jobs.length === 0 ? (
+        <div className="empty-state" style={{ marginTop: 12 }}>Nenhum treinamento realizado.</div>
+      ) : (
+        <div style={{ marginTop: 12 }}>
           <div className="training-jobs-list">
             {jobs.map(job => {
               const detail = jobDetails[job.job_id];
