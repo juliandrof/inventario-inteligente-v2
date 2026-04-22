@@ -34,13 +34,6 @@ const JOB_STATUS_LABELS = {
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif'];
 function isPhoto(name) { return IMAGE_EXTS.includes(name.split('.').pop()?.toLowerCase()); }
 
-function extractFrameInfo(filename) {
-  // "videoname_frame_4s.jpg" → { source: "videoname", time: "4s" }
-  const m = filename.match(/^(.+?)_frame_(\d+s)\.jpg$/);
-  if (m) return { source: m[1], time: m[2] };
-  return { source: '', time: filename.replace('.jpg', '') };
-}
-
 function Training() {
   const [tab, setTab] = useState('datasets');
   const [fixtureTypes, setFixtureTypes] = useState([]);
@@ -111,7 +104,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
   const [frameInterval, setFrameInterval] = useState(2);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
-  const [datasetName, setDatasetName] = useState('');
+  const [uploadedGroups, setUploadedGroups] = useState([]);
   const fileRef = useRef();
   const [dragOver, setDragOver] = useState(false);
 
@@ -158,11 +151,6 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
   const goToStep2 = () => {
     if (!selectedContext) { setError('Selecione um contexto'); return; }
     setError(null);
-    // Generate a dataset name from context + date
-    const ctx = contexts.find(c => String(c.context_id || c.id) === String(selectedContext));
-    const ctxLabel = (ctx?.display_name || ctx?.name || 'dataset').toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 20);
-    const ts = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    setDatasetName(`${ctxLabel}_${ts}`);
     setStep(2);
   };
 
@@ -188,26 +176,29 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
     if (!effectiveLLM) { setError('Selecione um modelo de IA'); return; }
     setUploading(true);
     setError(null);
+    const groups = [];
     try {
       // Save LLM model config
       setUploadProgress('Configurando modelo de IA...');
       await updateConfig('fmapi_model', effectiveLLM, 'Serving endpoint do modelo de visao');
 
-      // Upload all files under the same dataset_name (single source_group)
+      // Upload files
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
         setUploadProgress(`Processando ${f.name} (${i + 1}/${files.length})...`);
-        const result = await uploadTrainingImage(f.file, selectedContext, frameInterval, datasetName);
+        const result = await uploadTrainingImage(f.file, selectedContext, frameInterval);
+        groups.push(f.name);
         if (result?.frames_extracted) {
           setUploadProgress(`${result.frames_extracted} frames extraidos de "${f.name}"`);
         }
       }
+      setUploadedGroups(groups);
       setStep(4);
 
-      // Auto-annotate the unified dataset group
+      // Auto-annotate immediately
       setUploadProgress('');
-      loadDatasetFrames(datasetName);
-      startAutoAnnotate(datasetName);
+      loadAllFrames(groups);
+      startAutoAnnotate(groups);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -216,17 +207,22 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
     }
   };
 
-  const loadDatasetFrames = async (dsName) => {
+  const loadAllFrames = async (groups) => {
     setLoadingFrames(true);
     try {
-      const f = await fetchGroupFrames(dsName);
-      setFrames(Array.isArray(f) ? f : []);
+      let allFrames = [];
+      for (const g of groups) {
+        const f = await fetchGroupFrames(g);
+        allFrames = allFrames.concat(Array.isArray(f) ? f : []);
+      }
+      setFrames(allFrames);
     } catch (err) { setError(err.message); }
     setLoadingFrames(false);
   };
 
-  const startAutoAnnotate = async (dsName) => {
-    const sourceName = dsName;
+  const startAutoAnnotate = async (groups) => {
+    if (groups.length === 0) return;
+    const sourceName = groups[0];
     setAutoAnnotatingGroup(sourceName);
     setAnnotateProgress(null);
     try {
@@ -241,7 +237,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
             setAnnotateProgress(null);
             setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
             setTimeout(() => setSuccessMsg(null), 6000);
-            loadDatasetFrames(dsName);
+            loadAllFrames(groups);
           }
         } catch (_) { /* keep polling */ }
       }, 2000);
@@ -264,25 +260,14 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
       await saveAnnotations(annotatingImage.image_id, annotations);
       setAnnotatingImage(null);
       setAnnotatingData(null);
-      loadDatasetFrames(datasetName);
+      loadAllFrames(uploadedGroups);
     } catch (err) { setError(err.message); }
   };
 
   const handleAutoAnnotateFrame = async (image) => {
     try {
       await autoAnnotate(image.image_id);
-      loadDatasetFrames(datasetName);
-    } catch (err) { setError(err.message); }
-  };
-
-  const deleteSelected = async () => {
-    if (selectedFrames.size === 0) return;
-    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s)?`)) return;
-    try {
-      for (const id of selectedFrames) await deleteTrainingImage(id);
-      setSelectedFrames(new Set());
-      setSelectMode(false);
-      loadDatasetFrames(datasetName);
+      loadAllFrames(uploadedGroups);
     } catch (err) { setError(err.message); }
   };
 
@@ -294,6 +279,16 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
     });
   };
 
+  const deleteSelected = async () => {
+    if (selectedFrames.size === 0) return;
+    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s)?`)) return;
+    try {
+      for (const id of selectedFrames) await deleteTrainingImage(id);
+      setSelectedFrames(new Set());
+      setSelectMode(false);
+      loadAllFrames(uploadedGroups);
+    } catch (err) { setError(err.message); }
+  };
 
   const ftArray = fixtureTypes.map(ft => ({
     name: ft.name,
@@ -365,15 +360,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
           {step === 2 && (
             <>
               <h3 style={{ margin: '0 0 8px' }}>Upload do Dataset</h3>
-              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>Todos os arquivos farao parte do mesmo dataset. Adicione videos ou fotos.</p>
-
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do dataset</label>
-                <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px' }}
-                  value={datasetName}
-                  onChange={e => setDatasetName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
-                  placeholder="ex: expositores_20260422" />
-              </div>
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>Adicione videos ou fotos. Um arquivo por vez ou varios de uma vez.</p>
 
               <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
                 onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
@@ -537,12 +524,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
                         )}
                       </div>
                       <div className="training-frame-info">
-                        {(() => { const info = extractFrameInfo(fr.filename); return (
-                          <>
-                            <span className="training-frame-name">{info.time}</span>
-                            {info.source && <span style={{ fontSize: 10, color: '#9CA3AF', display: 'block', marginTop: 1 }}>{info.source}</span>}
-                          </>
-                        ); })()}
+                        <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
                         {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
                           <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
                         )}
@@ -1107,12 +1089,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                               )}
                             </div>
                             <div className="training-frame-info">
-                              {(() => { const info = extractFrameInfo(fr.filename); return (
-                                <>
-                                  <span className="training-frame-name">{info.time}</span>
-                                  {info.source && <span style={{ fontSize: 10, color: '#9CA3AF', display: 'block', marginTop: 1 }}>{info.source}</span>}
-                                </>
-                              ); })()}
+                              <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
                               {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
                                 <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
                               )}

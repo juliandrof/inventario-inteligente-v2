@@ -97,13 +97,12 @@ export const fetchGroupAnnotations = (sourceName) => request(`/training/groups/$
 
 // Training - Images
 export const fetchTrainingImages = () => request('/training/images');
-export const uploadTrainingImage = async (file, contextId, frameInterval, datasetName) => {
+export const uploadTrainingImage = async (file, contextId, frameInterval) => {
   const formData = new FormData();
   formData.append('file', file);
   const params = [];
   if (contextId) params.push(`context_id=${contextId}`);
   if (frameInterval) params.push(`frame_interval=${frameInterval}`);
-  if (datasetName) params.push(`dataset_name=${encodeURIComponent(datasetName)}`);
   const qs = params.length ? '?' + params.join('&') : '';
   const res = await fetch(`${BASE_URL}/training/images/upload${qs}`, { method: 'POST', body: formData });
   if (!res.ok) throw new Error(await res.text());
