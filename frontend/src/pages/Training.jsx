@@ -222,29 +222,34 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
 
   const startAutoAnnotate = async (groups) => {
     if (groups.length === 0) return;
-    const sourceName = groups[0];
-    setAutoAnnotatingGroup(sourceName);
-    setAnnotateProgress(null);
-    try {
-      await autoAnnotateGroup(sourceName);
-      const poll = setInterval(async () => {
-        try {
-          const status = await autoAnnotateGroupStatus(sourceName);
-          setAnnotateProgress(status);
-          if (status.status === 'COMPLETED') {
-            clearInterval(poll);
-            setAutoAnnotatingGroup(null);
-            setAnnotateProgress(null);
-            setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
-            setTimeout(() => setSuccessMsg(null), 6000);
-            loadAllFrames(groups);
-          }
-        } catch (_) { /* keep polling */ }
-      }, 2000);
-    } catch (err) {
-      setError(err.message);
-      setAutoAnnotatingGroup(null);
+    // Kick off auto-annotation for ALL groups in parallel
+    for (const sourceName of groups) {
+      try { await autoAnnotateGroup(sourceName); } catch (_) { /* ignore start errors */ }
     }
+    // Track overall progress by polling all groups
+    setAutoAnnotatingGroup(groups[0]);
+    setAnnotateProgress(null);
+    const poll = setInterval(async () => {
+      try {
+        let totalDone = 0, totalAll = 0, totalErrors = 0, allDone = true;
+        for (const g of groups) {
+          const status = await autoAnnotateGroupStatus(g);
+          totalDone += status.done || 0;
+          totalAll += status.total || 0;
+          totalErrors += status.errors || 0;
+          if (status.status !== 'COMPLETED') allDone = false;
+        }
+        setAnnotateProgress({ done: totalDone, total: totalAll, errors: totalErrors });
+        if (allDone) {
+          clearInterval(poll);
+          setAutoAnnotatingGroup(null);
+          setAnnotateProgress(null);
+          setSuccessMsg(`Auto-anotacao concluida: ${totalDone - totalErrors}/${totalAll} frames anotados`);
+          setTimeout(() => setSuccessMsg(null), 6000);
+          loadAllFrames(groups);
+        }
+      } catch (_) { /* keep polling */ }
+    }, 2000);
   };
 
   const handleAnnotate = async (image) => {
