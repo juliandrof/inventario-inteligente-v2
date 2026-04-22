@@ -1260,71 +1260,61 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
         uc_full_name = f"jsf_demo_catalog.scenic_crawler.{uc_short_name}"
 
         w = get_workspace_client()
+        import tempfile, shutil
 
-        # Step 1: Find existing weights directory (no download/re-upload needed)
-        uc_source_path = None
+        # Step 1: Download model weights from Volume
+        weight_paths = []
         if job.get("results_path"):
-            # The training script uploads weights to {results_path}/train/weights/
-            candidate = f"{job['results_path']}/train/weights"
+            rp = job["results_path"]
+            weight_paths += [f"{rp}/train/weights/best.pt", f"{rp}/train/weights/last.pt"]
+        if model_path_vol:
+            weight_paths.append(model_path_vol)
+            if model_path_vol.endswith("best.pt"):
+                weight_paths.append(model_path_vol.replace("best.pt", "last.pt"))
+
+        model_bytes = None
+        for wp in weight_paths:
             try:
-                # Check if directory has files
-                files_found = list(w.files.list_directory_contents(candidate))
-                if files_found:
-                    uc_source_path = candidate
-                    logger.info(f"Found weights at: {candidate}")
+                resp_dl = w.files.download(wp)
+                model_bytes = resp_dl.contents.read()
+                if model_bytes and len(model_bytes) > 100:
+                    logger.info(f"Downloaded weights: {wp} ({len(model_bytes)} bytes)")
+                    break
+                model_bytes = None
             except Exception:
-                pass
+                continue
+        if not model_bytes:
+            raise ValueError("Model weights not found in Volume")
 
-        if not uc_source_path:
-            # Fallback: use the model_path parent dir
-            if model_path_vol:
-                parent = model_path_vol.rsplit("/", 1)[0]
-                for try_dir in [parent, parent.replace('/trained_models/', '/yolo_models/')]:
-                    try:
-                        files_found = list(w.files.list_directory_contents(try_dir))
-                        if files_found:
-                            uc_source_path = try_dir
-                            logger.info(f"Found weights at: {try_dir}")
-                            break
-                    except Exception:
-                        continue
+        # Step 2: Save locally and register via MLflow with proper artifact format
+        tmp_dir = tempfile.mkdtemp()
+        local_model = os.path.join(tmp_dir, "model.pt")
+        with open(local_model, "wb") as f:
+            f.write(model_bytes)
 
-        if not uc_source_path:
-            raise ValueError("Model weights directory not found in Volume")
+        import mlflow
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+        mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
 
-        # Step 3: Create registered model in UC via SDK
-        try:
-            w.registered_models.create(
-                catalog_name="jsf_demo_catalog",
-                schema_name="scenic_crawler",
-                name=uc_short_name,
-                comment=f"YOLO model - {mr.get('model_name', '')}",
-            )
-            logger.info(f"Created UC registered model: {uc_full_name}")
-        except Exception as e:
-            if 'ALREADY_EXISTS' in str(e) or 'already exists' in str(e).lower():
-                logger.info(f"UC model {uc_full_name} already exists")
-            else:
-                raise
+        with mlflow.start_run(run_name=f"publish_{uc_short_name}") as run:
+            # Log metrics
+            for key, val in [("map50", mr.get("map50")), ("map50_95", mr.get("map50_95")),
+                             ("precision", mr.get("precision_val")), ("recall", mr.get("recall_val"))]:
+                if val:
+                    mlflow.log_metric(key, float(val))
+            mlflow.log_params({"model_size": job.get("model_size", "?"), "epochs": job.get("epochs", "?")})
 
-        # Step 4: Create model version via MLflow UC REST API
-        # (SDK ModelVersionsAPI has no create method - must use MLflow UC endpoint)
-        version_resp = w.api_client.do(
-            "POST",
-            "/api/2.0/mlflow/unity-catalog/model-versions/create",
-            body={
-                "name": uc_full_name,
-                "source": uc_source_path,
-                "description": json.dumps({
-                    "map50": mr.get("map50", 0),
-                    "map50_95": mr.get("map50_95", 0),
-                    "precision": mr.get("precision_val", 0),
-                    "recall": mr.get("recall_val", 0),
-                }),
-            },
-        )
-        uc_version = version_resp.get("model_version", {}).get("version")
-        logger.info(f"Created UC model version: {uc_full_name} v{uc_version}")
+            # Log model artifact (creates proper MLflow model format)
+            mlflow.log_artifact(local_model, artifact_path="model")
+
+            # Register in UC
+            model_uri = f"runs:/{run.info.run_id}/model"
+            registered = mlflow.register_model(model_uri, uc_full_name)
+            uc_version = registered.version
+            logger.info(f"Registered UC model: {uc_full_name} v{uc_version}")
+
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     except Exception as e:
         uc_error = str(e)
