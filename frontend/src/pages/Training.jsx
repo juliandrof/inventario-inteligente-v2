@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   fetchTrainingGroups, fetchGroupFrames, deleteTrainingGroup,
-  autoAnnotateGroup, autoAnnotateGroupStatus, fetchGroupAnnotations,
+  autoAnnotateGroup, autoAnnotateGroupStatus, fetchActiveAutoAnnotations, fetchGroupAnnotations,
   uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
   startTrainingJob, fetchTrainingJobs, fetchJobDetail, publishJobModel,
@@ -635,6 +635,37 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // Check for active auto-annotation jobs on mount and poll
+  useEffect(() => {
+    let pollInterval = null;
+    fetchActiveAutoAnnotations().then(active => {
+      const keys = Object.keys(active || {});
+      if (keys.length > 0) {
+        const sourceName = keys[0];
+        const job = active[sourceName];
+        setAutoAnnotatingGroup(sourceName);
+        setAnnotateProgress(job);
+
+        pollInterval = setInterval(async () => {
+          try {
+            const status = await autoAnnotateGroupStatus(sourceName);
+            setAnnotateProgress(status);
+            if (status.status === 'COMPLETED') {
+              clearInterval(pollInterval);
+              setAutoAnnotatingGroup(null);
+              setAnnotateProgress(null);
+              setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
+              setTimeout(() => setSuccessMsg(null), 6000);
+              load();
+            }
+          } catch (_) { /* keep polling */ }
+        }, 2000);
+      }
+    }).catch(() => {});
+
+    return () => { if (pollInterval) clearInterval(pollInterval); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Poll for active jobs
   useEffect(() => {
     const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
@@ -941,6 +972,21 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                   )}
                 </div>
               </div>
+
+              {/* Auto-annotation progress bar */}
+              {autoAnnotatingGroup === g.source_name && (
+                <div style={{ padding: '10px 16px', background: '#FFF7ED', borderTop: '1px solid #FDE68A', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div className="training-progress-bar-track" style={{ flex: 1 }}>
+                    <div className="training-progress-bar-fill" style={{
+                      width: annotateProgress ? `${(annotateProgress.done / Math.max(annotateProgress.total, 1)) * 100}%` : '10%',
+                      transition: 'width 0.3s',
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 13, color: '#92400E', whiteSpace: 'nowrap' }}>
+                    {annotateProgress ? `Auto-anotando: ${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando auto-anotacao...'}
+                  </span>
+                </div>
+              )}
 
               {/* Video player */}
               {playingGroup === g.source_name && g.video_url && (

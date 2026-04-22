@@ -543,6 +543,13 @@ async def auto_annotate_status(source_name: str):
     return job
 
 
+@router.get("/auto-annotate-active")
+async def get_active_auto_annotations():
+    """Return all currently running auto-annotation jobs."""
+    active = {k: v for k, v in _auto_annotate_jobs.items() if v.get("status") == "RUNNING"}
+    return active
+
+
 @router.get("/images")
 async def list_training_images(limit: int = Query(100), offset: int = Query(0)):
     """List training images with annotation counts."""

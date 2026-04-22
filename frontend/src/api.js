@@ -92,6 +92,7 @@ export const fetchGroupFrames = (sourceName) => request(`/training/groups/${enco
 export const deleteTrainingGroup = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}`, { method: 'DELETE' });
 export const autoAnnotateGroup = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/auto-annotate-all`, { method: 'POST' });
 export const autoAnnotateGroupStatus = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/auto-annotate-status`);
+export const fetchActiveAutoAnnotations = () => request('/training/auto-annotate-active');
 export const fetchGroupAnnotations = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/all-annotations`);
 
 // Training - Images
