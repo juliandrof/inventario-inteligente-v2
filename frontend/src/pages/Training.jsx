@@ -318,20 +318,22 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
       </div>
 
       {/* Upload zone */}
-      <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
-        onDrop={e => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files); }}
-        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onClick={() => fileInputRef.current?.click()}>
-        <div className="upload-icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4" stroke="#999" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
+      <div className="card">
+        <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
+          onDrop={e => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files); }}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onClick={() => fileInputRef.current?.click()}>
+          <div className="upload-icon">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 34v4a2 2 0 002 2h28a2 2 0 002-2v-4" stroke="var(--app-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <p>{uploading ? (uploadProgress || 'Extraindo frames...') : 'Arraste arquivos aqui ou clique para selecionar'}</p>
+          <p className="upload-hint">Videos: frames extraidos a 1/segundo | Imagens: adicionadas diretamente</p>
+          <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
+            onChange={e => handleUpload(e.target.files)} />
         </div>
-        <p>{uploading ? (uploadProgress || 'Extraindo frames...') : 'Arraste videos ou imagens aqui'}</p>
-        <p className="upload-hint">Videos: frames extraidos a 1/segundo | Imagens: adicionadas diretamente</p>
-        <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
-          onChange={e => handleUpload(e.target.files)} />
       </div>
 
       {/* Source groups */}
