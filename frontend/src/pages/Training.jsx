@@ -303,18 +303,41 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
         </div>
       )}
 
-      {/* Context selector */}
-      <div className="card" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <label style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>Contexto:</label>
-        <select className="filter-select" value={selectedContext} onChange={e => setSelectedContext(e.target.value)} style={{ minWidth: 200 }}>
-          <option value="">Todos (global)</option>
-          {contexts.map(ctx => (
-            <option key={ctx.context_id || ctx.id} value={ctx.context_id || ctx.id}>
-              {ctx.icon || ''} {ctx.display_name || ctx.name}
-            </option>
-          ))}
-        </select>
-        <span style={{ fontSize: 12, color: '#9CA3AF' }}>Filtrar dados de treinamento e tipos de objeto por contexto</span>
+      {/* Context selector - card grid matching Upload page */}
+      <div className="card">
+        <h3>Selecione o contexto de treinamento</h3>
+        <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
+          O contexto define quais tipos de objeto serao usados nas anotacoes e no treinamento.
+        </p>
+        {contexts.length === 0 ? (
+          <div className="empty-state">Nenhum contexto encontrado. Crie um em Configuracoes.</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+            {contexts.map(ctx => {
+              const ctxId = ctx.context_id || ctx.id;
+              const isSelected = String(selectedContext) === String(ctxId);
+              return (
+                <div
+                  key={ctxId}
+                  onClick={() => setSelectedContext(isSelected ? '' : ctxId)}
+                  style={{
+                    padding: '20px 16px', borderRadius: 12, cursor: 'pointer', textAlign: 'center',
+                    border: isSelected ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                    background: isSelected ? '#FFF1F2' : '#fff',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>{ctx.icon || '🎯'}</div>
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{ctx.display_name || ctx.name}</div>
+                  {ctx.description && <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.4 }}>{ctx.description}</div>}
+                  {isSelected && (
+                    <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Upload zone */}
