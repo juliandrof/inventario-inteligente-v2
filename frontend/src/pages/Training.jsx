@@ -60,7 +60,7 @@ function Training() {
         <h1>Treinamento YOLO</h1>
         {tab === 'datasets' && (
           <button className="btn btn-primary" onClick={() => setShowWizard(true)}>
-            Novo Treinamento
+            Novo Dataset
           </button>
         )}
       </div>
@@ -304,7 +304,7 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
         {/* Header */}
         <div style={{ padding: '20px 24px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h2 style={{ margin: 0 }}>Novo Treinamento</h2>
+            <h2 style={{ margin: 0 }}>Novo Dataset</h2>
             <div style={{ display: 'flex', gap: 24, marginTop: 12 }}>
               {[{ n: 1, l: 'Contexto' }, { n: 2, l: 'Upload' }, { n: 3, l: 'Modelo IA' }, { n: 4, l: 'Revisar' }].map(s => (
                 <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: step >= s.n ? 1 : 0.4 }}>
