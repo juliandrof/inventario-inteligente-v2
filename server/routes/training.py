@@ -1260,58 +1260,20 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
         uc_full_name = f"jsf_demo_catalog.scenic_crawler.{uc_short_name}"
 
         w = get_workspace_client()
-        import urllib.request, ssl
-        try:
-            ssl._create_default_https_context = ssl._create_unverified_context
-        except Exception:
-            pass
-
-        host = w.config.host.rstrip("/")
-        auth_headers = w.config.authenticate()
-        token = auth_headers.get("Authorization", "").replace("Bearer ", "") if auth_headers else ""
-        hdr = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-        # Step 1: Ensure registered model exists in UC
-        create_model_payload = json.dumps({
-            "catalog_name": "jsf_demo_catalog",
-            "schema_name": "scenic_crawler",
-            "name": uc_short_name,
-            "comment": f"YOLO model from Inventario Inteligente - {mr.get('model_name', '')}",
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            f"{host}/api/2.1/unity-catalog/models",
-            data=create_model_payload, headers=hdr, method="POST")
-        try:
-            urllib.request.urlopen(req, timeout=15)
-            logger.info(f"Created UC model: {uc_full_name}")
-        except urllib.error.HTTPError as e:
-            body = e.read().decode() if hasattr(e, 'read') else ''
-            if e.code == 409 or 'ALREADY_EXISTS' in body:
-                logger.info(f"UC model {uc_full_name} already exists")
-            else:
-                raise ValueError(f"Failed to create UC model: {e.code} {body[:300]}")
-
-        # Step 2: Copy model weights to a UC-accessible location
         import io as _io
 
-        # Try to download model - handle missing best.pt (fallback to last.pt)
+        # Step 1: Download model weights (try best.pt then last.pt)
         model_bytes = None
-        paths_to_try = []
-        for base_path in [model_path_vol]:
-            paths_to_try.append(base_path)
-            # If path has old "trained_models" volume, also try "yolo_models"
-            if '/trained_models/' in base_path:
-                paths_to_try.append(base_path.replace('/trained_models/', '/yolo_models/'))
-        # Also try from job's results_path with best.pt and last.pt
+        paths_to_try = [model_path_vol]
+        if '/trained_models/' in model_path_vol:
+            paths_to_try.append(model_path_vol.replace('/trained_models/', '/yolo_models/'))
         if job.get("results_path"):
             paths_to_try.append(f"{job['results_path']}/train/weights/best.pt")
             paths_to_try.append(f"{job['results_path']}/train/weights/last.pt")
-        # Also try last.pt variant of the original path
         for p in list(paths_to_try):
             if p.endswith('best.pt'):
                 paths_to_try.append(p.replace('best.pt', 'last.pt'))
 
-        download_error = None
         for try_path in paths_to_try:
             try:
                 resp_dl = w.files.download(try_path)
@@ -1320,35 +1282,46 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
                     logger.info(f"Downloaded model from: {try_path} ({len(model_bytes)} bytes)")
                     break
                 model_bytes = None
-            except Exception as e:
-                download_error = f"{try_path}: {e}"
+            except Exception:
                 continue
 
         if not model_bytes:
-            raise ValueError(f"Model weights not found. Tried: {', '.join(paths_to_try)}. Last error: {download_error}")
-        uc_source_path = f"/Volumes/jsf_demo_catalog/scenic_crawler/yolo_models/uc_{uc_short_name}_{model_id}"
-        w.files.upload(f"{uc_source_path}/best.pt", _io.BytesIO(model_bytes), overwrite=True)
-        logger.info(f"Uploaded model to {uc_source_path}/best.pt ({len(model_bytes)} bytes)")
+            raise ValueError(f"Model weights not found in Volume")
 
-        # Step 3: Create model version pointing to Volume path
-        create_version_payload = json.dumps({
-            "catalog_name": "jsf_demo_catalog",
-            "schema_name": "scenic_crawler",
-            "model_name": uc_short_name,
-            "source": uc_source_path,
-            "comment": json.dumps({
+        # Step 2: Upload to a dedicated UC source path
+        uc_source_path = f"/Volumes/jsf_demo_catalog/scenic_crawler/yolo_models/uc_{uc_short_name}_{model_id}"
+        w.files.upload(f"{uc_source_path}/model.pt", _io.BytesIO(model_bytes), overwrite=True)
+        logger.info(f"Uploaded model to {uc_source_path}/model.pt ({len(model_bytes)} bytes)")
+
+        # Step 3: Create registered model in UC via SDK
+        try:
+            w.registered_models.create(
+                catalog_name="jsf_demo_catalog",
+                schema_name="scenic_crawler",
+                name=uc_short_name,
+                comment=f"YOLO model - {mr.get('model_name', '')}",
+            )
+            logger.info(f"Created UC registered model: {uc_full_name}")
+        except Exception as e:
+            if 'ALREADY_EXISTS' in str(e) or 'already exists' in str(e).lower():
+                logger.info(f"UC model {uc_full_name} already exists")
+            else:
+                raise
+
+        # Step 4: Create model version via SDK
+        version_info = w.model_versions.create(
+            catalog_name="jsf_demo_catalog",
+            schema_name="scenic_crawler",
+            model_name=uc_short_name,
+            source=uc_source_path,
+            comment=json.dumps({
                 "map50": mr.get("map50", 0),
                 "map50_95": mr.get("map50_95", 0),
                 "precision": mr.get("precision_val", 0),
                 "recall": mr.get("recall_val", 0),
             }),
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            f"{host}/api/2.1/unity-catalog/model-versions",
-            data=create_version_payload, headers=hdr, method="POST")
-        resp_data = urllib.request.urlopen(req, timeout=30)
-        version_resp = json.loads(resp_data.read())
-        uc_version = version_resp.get("model_version", {}).get("version", version_resp.get("version"))
+        )
+        uc_version = version_info.version
         logger.info(f"Created UC model version: {uc_full_name} v{uc_version}")
 
     except Exception as e:
