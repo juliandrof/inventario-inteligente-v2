@@ -1308,20 +1308,23 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
             else:
                 raise
 
-        # Step 4: Create model version via SDK
-        version_info = w.model_versions.create(
-            catalog_name="jsf_demo_catalog",
-            schema_name="scenic_crawler",
-            model_name=uc_short_name,
-            source=uc_source_path,
-            comment=json.dumps({
-                "map50": mr.get("map50", 0),
-                "map50_95": mr.get("map50_95", 0),
-                "precision": mr.get("precision_val", 0),
-                "recall": mr.get("recall_val", 0),
-            }),
+        # Step 4: Create model version via MLflow UC REST API
+        # (SDK ModelVersionsAPI has no create method - must use MLflow UC endpoint)
+        version_resp = w.api_client.do(
+            "POST",
+            "/api/2.0/mlflow/unity-catalog/model-versions/create",
+            body={
+                "name": uc_full_name,
+                "source": uc_source_path,
+                "description": json.dumps({
+                    "map50": mr.get("map50", 0),
+                    "map50_95": mr.get("map50_95", 0),
+                    "precision": mr.get("precision_val", 0),
+                    "recall": mr.get("recall_val", 0),
+                }),
+            },
         )
-        uc_version = version_info.version
+        uc_version = version_resp.get("model_version", {}).get("version")
         logger.info(f"Created UC model version: {uc_full_name} v{uc_version}")
 
     except Exception as e:
