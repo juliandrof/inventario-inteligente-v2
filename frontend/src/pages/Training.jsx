@@ -612,6 +612,7 @@ function TrainingTab() {
   const [batchSize, setBatchSize] = useState(16);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
   const [expandedJobId, setExpandedJobId] = useState(null);
   const [jobDetails, setJobDetails] = useState({});
   const [tooltipKey, setTooltipKey] = useState(null);
@@ -666,13 +667,19 @@ function TrainingTab() {
     }
   };
 
+  const [publishing, setPublishing] = useState(null);
   const handlePublish = async (jobId) => {
     try {
-      await publishJobModel(jobId);
-      loadJobs(false);
+      setPublishing(jobId);
       setError(null);
+      const result = await publishJobModel(jobId);
+      loadJobs(false);
+      setSuccessMsg(`Modelo publicado e ativado com sucesso! (ID: ${result.model_id})`);
+      setTimeout(() => setSuccessMsg(null), 6000);
     } catch (err) {
-      setError(err.message);
+      setError(`Falha ao publicar: ${err.message}`);
+    } finally {
+      setPublishing(null);
     }
   };
 
@@ -689,6 +696,7 @@ function TrainingTab() {
   return (
     <>
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
+      {successMsg && <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
 
       <div style={{ marginBottom: 20 }}>
         <button className="btn btn-primary" onClick={() => setShowConfig(!showConfig)}>
@@ -853,8 +861,8 @@ function TrainingTab() {
                         )}
 
                         <div style={{ marginTop: 16 }}>
-                          <button className="btn btn-primary" onClick={() => handlePublish(job.job_id)}>
-                            Publicar Modelo
+                          <button className="btn btn-primary" onClick={() => handlePublish(job.job_id)} disabled={publishing === job.job_id}>
+                            {publishing === job.job_id ? 'Publicando...' : 'Publicar Modelo'}
                           </button>
                         </div>
                       </>

@@ -1216,12 +1216,13 @@ async def publish_job_model(job_id: int):
 
         model_id = int(time.time() * 1000)
         model_path = metrics.get("best_model_path", f"{job.get('results_path', '')}/train/weights/best.pt")
+        context_id = job.get("context_id")
         execute_update("""
             INSERT INTO trained_models
             (model_id, job_id, model_name, model_path, map50, map50_95,
-             precision_val, recall_val, is_active, created_at)
+             precision_val, recall_val, is_active, context_id, created_at)
             VALUES (%(mid)s, %(jid)s, %(mn)s, %(mp)s, %(m50)s, %(m5095)s,
-                    %(prec)s, %(rec)s, FALSE, NOW())
+                    %(prec)s, %(rec)s, FALSE, %(ctx)s, NOW())
         """, {
             "mid": model_id, "jid": job_id,
             "mn": f"yolov8{job.get('model_size', '?')}_e{job.get('epochs', '?')}",
@@ -1230,6 +1231,7 @@ async def publish_job_model(job_id: int):
             "m5095": metrics.get("map50_95", 0),
             "prec": metrics.get("precision", 0),
             "rec": metrics.get("recall", 0),
+            "ctx": context_id,
         })
 
     # Activate
