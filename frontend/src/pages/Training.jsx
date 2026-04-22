@@ -674,7 +674,8 @@ function TrainingTab() {
       setError(null);
       const result = await publishJobModel(jobId);
       loadJobs(false);
-      setSuccessMsg(`Modelo publicado e ativado com sucesso! (ID: ${result.model_id})`);
+      const ucInfo = result.uc_model ? ` | Registrado no UC: ${result.uc_model} v${result.uc_version || '?'}` : '';
+      setSuccessMsg(`Modelo publicado e ativado com sucesso!${ucInfo}`);
       setTimeout(() => setSuccessMsg(null), 6000);
     } catch (err) {
       setError(`Falha ao publicar: ${err.message}`);

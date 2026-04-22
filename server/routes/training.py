@@ -1237,7 +1237,117 @@ async def publish_job_model(job_id: int):
     # Activate
     execute_update("UPDATE trained_models SET is_active = FALSE")
     execute_update("UPDATE trained_models SET is_active = TRUE WHERE model_id = %(mid)s", {"mid": model_id})
-    return {"model_id": model_id, "activated": True}
+
+    # Register model in UC / MLflow
+    uc_model_name = None
+    uc_version = None
+    try:
+        model_row = execute_query(
+            "SELECT model_name, model_path, map50, map50_95, precision_val, recall_val FROM trained_models WHERE model_id = %(mid)s",
+            {"mid": model_id})
+        if model_row:
+            mr = model_row[0]
+            model_path_vol = mr.get("model_path", "")
+
+            w = get_workspace_client()
+            import urllib.request, urllib.error, ssl
+            try:
+                ssl._create_default_https_context = ssl._create_unverified_context
+            except Exception:
+                pass
+
+            host = w.config.host.rstrip("/")
+            headers = w.config.authenticate()
+            token = headers.get("Authorization", "").replace("Bearer ", "") if headers else ""
+            auth_header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+            # Step 1: Find the MLflow run_id from the training job metrics
+            mlflow_run_id = None
+            if job.get("metrics_json"):
+                try:
+                    mj = json.loads(job["metrics_json"])
+                    mlflow_run_id = mj.get("mlflow_run_id")
+                except Exception:
+                    pass
+
+            catalog_schema = "jsf_demo_catalog.scenic_crawler"
+            uc_model_name = f"{catalog_schema}.yolo_detector"
+
+            if mlflow_run_id:
+                # Register from existing MLflow run
+                import json as _json
+                payload = _json.dumps({
+                    "name": uc_model_name,
+                    "source": f"runs:/{mlflow_run_id}/best.pt",
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{host}/api/2.0/mlflow/registered-models/create",
+                    data=payload, headers=auth_header, method="POST")
+                try:
+                    urllib.request.urlopen(req, timeout=15)
+                except Exception:
+                    pass  # Model might already exist
+
+                # Create version
+                payload = _json.dumps({
+                    "name": uc_model_name,
+                    "source": f"runs:/{mlflow_run_id}/best.pt",
+                    "run_id": mlflow_run_id,
+                }).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{host}/api/2.0/mlflow/model-versions/create",
+                    data=payload, headers=auth_header, method="POST")
+                resp_data = urllib.request.urlopen(req, timeout=30)
+                version_resp = json.loads(resp_data.read())
+                uc_version = version_resp.get("model_version", {}).get("version")
+                logger.info(f"Registered model {uc_model_name} version {uc_version} from run {mlflow_run_id}")
+            else:
+                # No MLflow run - create experiment, log artifact, register
+                import tempfile, shutil
+
+                # Download model weights from Volume
+                resp = w.files.download(model_path_vol)
+                tmp_dir = tempfile.mkdtemp()
+                local_model = os.path.join(tmp_dir, "best.pt")
+                with open(local_model, "wb") as f:
+                    f.write(resp.contents.read())
+
+                # Use MLflow to log and register
+                import mlflow
+                mlflow.set_tracking_uri("databricks")
+                mlflow.set_registry_uri("databricks-uc")
+                mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
+
+                with mlflow.start_run(run_name=f"publish_{mr.get('model_name', 'yolo')}") as run:
+                    mlflow.log_artifact(local_model)
+                    if mr.get("map50"):
+                        mlflow.log_metric("map50", float(mr["map50"]))
+                    if mr.get("map50_95"):
+                        mlflow.log_metric("map50_95", float(mr["map50_95"]))
+                    if mr.get("precision_val"):
+                        mlflow.log_metric("precision", float(mr["precision_val"]))
+                    if mr.get("recall_val"):
+                        mlflow.log_metric("recall", float(mr["recall_val"]))
+
+                    registered = mlflow.register_model(
+                        f"runs:/{run.info.run_id}/best.pt",
+                        uc_model_name,
+                    )
+                    uc_version = registered.version
+                    logger.info(f"Registered model {uc_model_name} v{uc_version}")
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.warning(f"UC/MLflow registration failed (non-fatal): {e}", exc_info=True)
+        # Non-fatal: model is still published in the app DB
+
+    result = {"model_id": model_id, "activated": True}
+    if uc_model_name:
+        result["uc_model"] = uc_model_name
+    if uc_version:
+        result["uc_version"] = uc_version
+    return result
 
 
 @router.post("/models/{model_id}/activate")
