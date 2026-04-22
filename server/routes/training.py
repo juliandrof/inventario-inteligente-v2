@@ -231,17 +231,18 @@ async def training_debug():
 
 
 @router.post("/images/upload")
-async def upload_training_image(file: UploadFile = File(...), context_id: int = Query(None), frame_interval: int = Query(2)):
+async def upload_training_image(file: UploadFile = File(...), context_id: int = Query(None), frame_interval: int = Query(2), dataset_name: str = Query(None)):
     """Upload a training image (or video, extracting frames) to Volume.
 
     frame_interval: seconds between extracted frames (default 2).
+    dataset_name: optional shared source_group name to group multiple uploads.
     """
     import io
     import traceback
     from PIL import Image as PILImage
 
     try:
-        return await _do_upload(file, io, PILImage, context_id=context_id, frame_interval=frame_interval)
+        return await _do_upload(file, io, PILImage, context_id=context_id, frame_interval=frame_interval, dataset_name=dataset_name)
     except HTTPException:
         raise
     except Exception as e:
@@ -249,8 +250,9 @@ async def upload_training_image(file: UploadFile = File(...), context_id: int = 
         raise HTTPException(500, f"Upload failed: {type(e).__name__}: {e}")
 
 
-async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2):
+async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2, dataset_name=None):
     filename = file.filename or f"image_{int(time.time() * 1000)}.jpg"
+    group_name = dataset_name or filename  # shared group name if provided
 
     content = await file.read()
     if not content:
@@ -283,7 +285,7 @@ async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2):
             execute_update("""
                 INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
                 VALUES (%(iid)s, %(fn)s, %(vp)s, 0, 0, -1, %(sg)s, NOW(), %(ctx)s)
-            """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": filename, "ctx": context_id})
+            """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": group_name, "ctx": context_id})
 
             created_records = []
             seconds = 0
@@ -305,7 +307,7 @@ async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2):
                     execute_update("""
                         INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
                         VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW(), %(ctx)s)
-                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename, "ctx": context_id})
+                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": group_name, "ctx": context_id})
 
                     created_records.append({
                         "image_id": image_id,
@@ -353,7 +355,7 @@ async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2):
     execute_update("""
         INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
         VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW(), %(ctx)s)
-    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height, "sg": filename, "ctx": context_id})
+    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height, "sg": group_name, "ctx": context_id})
 
     return {
         "image_id": image_id,
