@@ -113,7 +113,7 @@ export const fetchJobDetail = (id) => request(`/training/jobs/${id}`);
 export const pollJobStatus = (id) => request(`/training/jobs/${id}/status`);
 export const fetchTrainedModels = () => request('/training/models');
 export const activateModel = (id) => request(`/training/models/${id}/activate`, { method: 'POST' });
-export const publishJobModel = (jobId) => request(`/training/jobs/${jobId}/publish`, { method: 'POST' });
+export const publishJobModel = (jobId, ucModelName) => request(`/training/jobs/${jobId}/publish`, { method: 'POST', body: JSON.stringify({ uc_model_name: ucModelName || null }) });
 export const deleteModel = (id) => request(`/training/models/${id}`, { method: 'DELETE' });
 export const fetchDetectionMode = () => request('/training/detection-mode');
 export const setDetectionMode = (mode) => request('/training/detection-mode', { method: 'PUT', body: JSON.stringify({ mode }) });

@@ -668,15 +668,31 @@ function TrainingTab() {
   };
 
   const [publishing, setPublishing] = useState(null);
-  const handlePublish = async (jobId) => {
+  const [publishModal, setPublishModal] = useState(null); // { jobId, modelSize, epochs }
+  const [publishName, setPublishName] = useState('');
+
+  const openPublishModal = (job) => {
+    const suggested = `yolo_${job.model_size || 'n'}_e${job.epochs || 50}`;
+    setPublishName(suggested);
+    setPublishModal({ jobId: job.job_id });
+  };
+
+  const handlePublish = async () => {
+    if (!publishModal) return;
     try {
-      setPublishing(jobId);
+      setPublishing(publishModal.jobId);
       setError(null);
-      const result = await publishJobModel(jobId);
+      setPublishModal(null);
+      const result = await publishJobModel(publishModal.jobId, publishName);
       loadJobs(false);
-      const ucInfo = result.uc_model ? ` | Registrado no UC: ${result.uc_model} v${result.uc_version || '?'}` : '';
-      setSuccessMsg(`Modelo publicado e ativado com sucesso!${ucInfo}`);
-      setTimeout(() => setSuccessMsg(null), 6000);
+      const ucInfo = result.uc_model
+        ? ` | UC: ${result.uc_model} v${result.uc_version || '?'}`
+        : '';
+      const ucErr = result.uc_error
+        ? ` | Erro UC: ${result.uc_error}`
+        : '';
+      setSuccessMsg(`Modelo publicado e ativado!${ucInfo}${ucErr}`);
+      setTimeout(() => setSuccessMsg(null), 10000);
     } catch (err) {
       setError(`Falha ao publicar: ${err.message}`);
     } finally {
@@ -698,6 +714,35 @@ function TrainingTab() {
     <>
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
       {successMsg && <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
+
+      {/* Publish Modal */}
+      {publishModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 480, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ margin: '0 0 8px' }}>Publicar Modelo no Unity Catalog</h3>
+            <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>
+              O modelo sera registrado em <strong>jsf_demo_catalog.scenic_crawler</strong> com o nome abaixo.
+            </p>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo no UC</label>
+            <input
+              className="inline-input"
+              style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 4 }}
+              value={publishName}
+              onChange={e => setPublishName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+              placeholder="ex: yolo_expositores_v1"
+            />
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 20 }}>
+              Nome completo: <code>jsf_demo_catalog.scenic_crawler.{publishName || '...'}</code>
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setPublishModal(null)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handlePublish} disabled={!publishName}>
+                Publicar e Registrar no UC
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginBottom: 20 }}>
         <button className="btn btn-primary" onClick={() => setShowConfig(!showConfig)}>
@@ -862,7 +907,7 @@ function TrainingTab() {
                         )}
 
                         <div style={{ marginTop: 16 }}>
-                          <button className="btn btn-primary" onClick={() => handlePublish(job.job_id)} disabled={publishing === job.job_id}>
+                          <button className="btn btn-primary" onClick={() => openPublishModal(job)} disabled={publishing === job.job_id}>
                             {publishing === job.job_id ? 'Publicando...' : 'Publicar Modelo'}
                           </button>
                         </div>

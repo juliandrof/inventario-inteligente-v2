@@ -1177,9 +1177,16 @@ async def list_trained_models(limit: int = Query(20), offset: int = Query(0)):
     return {"models": models, "total": total[0]["cnt"] if total else 0}
 
 
+class PublishPayload(BaseModel):
+    uc_model_name: Optional[str] = None
+
+
 @router.post("/jobs/{job_id}/publish")
-async def publish_job_model(job_id: int):
-    """Create a trained_model from a completed job and activate it."""
+async def publish_job_model(job_id: int, payload: PublishPayload = None):
+    """Create a trained_model from a completed job, activate it, and register in UC."""
+    if payload is None:
+        payload = PublishPayload()
+
     job = execute_query(
         "SELECT * FROM training_jobs WHERE job_id = %(jid)s", {"jid": job_id})
     if not job:
@@ -1194,15 +1201,13 @@ async def publish_job_model(job_id: int):
     if existing:
         model_id = existing[0]["model_id"]
     else:
-        # Try to parse metrics
+        # Parse metrics
         metrics = {}
         if job.get("metrics_json"):
             try:
                 metrics = json.loads(job["metrics_json"])
             except Exception:
                 pass
-
-        # If no metrics in DB, try to fetch from Volume
         if not metrics and job.get("results_path"):
             try:
                 from server.yolo_trainer import parse_training_results
@@ -1217,6 +1222,7 @@ async def publish_job_model(job_id: int):
         model_id = int(time.time() * 1000)
         model_path = metrics.get("best_model_path", f"{job.get('results_path', '')}/train/weights/best.pt")
         context_id = job.get("context_id")
+        model_display = f"yolov8{job.get('model_size', '?')}_e{job.get('epochs', '?')}"
         execute_update("""
             INSERT INTO trained_models
             (model_id, job_id, model_name, model_path, map50, map50_95,
@@ -1224,13 +1230,9 @@ async def publish_job_model(job_id: int):
             VALUES (%(mid)s, %(jid)s, %(mn)s, %(mp)s, %(m50)s, %(m5095)s,
                     %(prec)s, %(rec)s, FALSE, %(ctx)s, NOW())
         """, {
-            "mid": model_id, "jid": job_id,
-            "mn": f"yolov8{job.get('model_size', '?')}_e{job.get('epochs', '?')}",
-            "mp": model_path,
-            "m50": metrics.get("map50", 0),
-            "m5095": metrics.get("map50_95", 0),
-            "prec": metrics.get("precision", 0),
-            "rec": metrics.get("recall", 0),
+            "mid": model_id, "jid": job_id, "mn": model_display, "mp": model_path,
+            "m50": metrics.get("map50", 0), "m5095": metrics.get("map50_95", 0),
+            "prec": metrics.get("precision", 0), "rec": metrics.get("recall", 0),
             "ctx": context_id,
         })
 
@@ -1238,115 +1240,98 @@ async def publish_job_model(job_id: int):
     execute_update("UPDATE trained_models SET is_active = FALSE")
     execute_update("UPDATE trained_models SET is_active = TRUE WHERE model_id = %(mid)s", {"mid": model_id})
 
-    # Register model in UC / MLflow
-    uc_model_name = None
+    # Register in Unity Catalog
+    uc_full_name = None
     uc_version = None
+    uc_error = None
     try:
         model_row = execute_query(
             "SELECT model_name, model_path, map50, map50_95, precision_val, recall_val FROM trained_models WHERE model_id = %(mid)s",
             {"mid": model_id})
-        if model_row:
-            mr = model_row[0]
-            model_path_vol = mr.get("model_path", "")
+        if not model_row:
+            raise ValueError("Model record not found after insert")
 
-            w = get_workspace_client()
-            import urllib.request, urllib.error, ssl
-            try:
-                ssl._create_default_https_context = ssl._create_unverified_context
-            except Exception:
-                pass
+        mr = model_row[0]
+        model_path_vol = mr.get("model_path", "")
 
-            host = w.config.host.rstrip("/")
-            headers = w.config.authenticate()
-            token = headers.get("Authorization", "").replace("Bearer ", "") if headers else ""
-            auth_header = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        # UC model name: user-provided or default
+        uc_short_name = payload.uc_model_name or "yolo_detector"
+        uc_short_name = uc_short_name.lower().strip().replace(" ", "_").replace("-", "_")
+        uc_full_name = f"jsf_demo_catalog.scenic_crawler.{uc_short_name}"
 
-            # Step 1: Find the MLflow run_id from the training job metrics
-            mlflow_run_id = None
-            if job.get("metrics_json"):
-                try:
-                    mj = json.loads(job["metrics_json"])
-                    mlflow_run_id = mj.get("mlflow_run_id")
-                except Exception:
-                    pass
+        w = get_workspace_client()
+        import urllib.request, ssl
+        try:
+            ssl._create_default_https_context = ssl._create_unverified_context
+        except Exception:
+            pass
 
-            catalog_schema = "jsf_demo_catalog.scenic_crawler"
-            uc_model_name = f"{catalog_schema}.yolo_detector"
+        host = w.config.host.rstrip("/")
+        auth_headers = w.config.authenticate()
+        token = auth_headers.get("Authorization", "").replace("Bearer ", "") if auth_headers else ""
+        hdr = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-            if mlflow_run_id:
-                # Register from existing MLflow run
-                import json as _json
-                payload = _json.dumps({
-                    "name": uc_model_name,
-                    "source": f"runs:/{mlflow_run_id}/best.pt",
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{host}/api/2.0/mlflow/registered-models/create",
-                    data=payload, headers=auth_header, method="POST")
-                try:
-                    urllib.request.urlopen(req, timeout=15)
-                except Exception:
-                    pass  # Model might already exist
-
-                # Create version
-                payload = _json.dumps({
-                    "name": uc_model_name,
-                    "source": f"runs:/{mlflow_run_id}/best.pt",
-                    "run_id": mlflow_run_id,
-                }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{host}/api/2.0/mlflow/model-versions/create",
-                    data=payload, headers=auth_header, method="POST")
-                resp_data = urllib.request.urlopen(req, timeout=30)
-                version_resp = json.loads(resp_data.read())
-                uc_version = version_resp.get("model_version", {}).get("version")
-                logger.info(f"Registered model {uc_model_name} version {uc_version} from run {mlflow_run_id}")
+        # Step 1: Ensure registered model exists in UC
+        create_model_payload = json.dumps({
+            "catalog_name": "jsf_demo_catalog",
+            "schema_name": "scenic_crawler",
+            "name": uc_short_name,
+            "comment": f"YOLO model from Inventario Inteligente - {mr.get('model_name', '')}",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{host}/api/2.1/unity-catalog/models",
+            data=create_model_payload, headers=hdr, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=15)
+            logger.info(f"Created UC model: {uc_full_name}")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode() if hasattr(e, 'read') else ''
+            if e.code == 409 or 'ALREADY_EXISTS' in body:
+                logger.info(f"UC model {uc_full_name} already exists")
             else:
-                # No MLflow run - create experiment, log artifact, register
-                import tempfile, shutil
+                raise ValueError(f"Failed to create UC model: {e.code} {body[:300]}")
 
-                # Download model weights from Volume
-                resp = w.files.download(model_path_vol)
-                tmp_dir = tempfile.mkdtemp()
-                local_model = os.path.join(tmp_dir, "best.pt")
-                with open(local_model, "wb") as f:
-                    f.write(resp.contents.read())
+        # Step 2: Copy model weights to a UC-accessible location
+        # Upload best.pt to a Volume subdir that UC can reference
+        import io as _io
+        model_resp = w.files.download(model_path_vol)
+        model_bytes = model_resp.contents.read()
+        uc_source_path = f"/Volumes/jsf_demo_catalog/scenic_crawler/yolo_models/uc_{uc_short_name}_{model_id}"
+        w.files.upload(f"{uc_source_path}/best.pt", _io.BytesIO(model_bytes), overwrite=True)
+        logger.info(f"Uploaded model to {uc_source_path}/best.pt ({len(model_bytes)} bytes)")
 
-                # Use MLflow to log and register
-                import mlflow
-                mlflow.set_tracking_uri("databricks")
-                mlflow.set_registry_uri("databricks-uc")
-                mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
-
-                with mlflow.start_run(run_name=f"publish_{mr.get('model_name', 'yolo')}") as run:
-                    mlflow.log_artifact(local_model)
-                    if mr.get("map50"):
-                        mlflow.log_metric("map50", float(mr["map50"]))
-                    if mr.get("map50_95"):
-                        mlflow.log_metric("map50_95", float(mr["map50_95"]))
-                    if mr.get("precision_val"):
-                        mlflow.log_metric("precision", float(mr["precision_val"]))
-                    if mr.get("recall_val"):
-                        mlflow.log_metric("recall", float(mr["recall_val"]))
-
-                    registered = mlflow.register_model(
-                        f"runs:/{run.info.run_id}/best.pt",
-                        uc_model_name,
-                    )
-                    uc_version = registered.version
-                    logger.info(f"Registered model {uc_model_name} v{uc_version}")
-
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+        # Step 3: Create model version pointing to Volume path
+        create_version_payload = json.dumps({
+            "catalog_name": "jsf_demo_catalog",
+            "schema_name": "scenic_crawler",
+            "model_name": uc_short_name,
+            "source": uc_source_path,
+            "comment": json.dumps({
+                "map50": mr.get("map50", 0),
+                "map50_95": mr.get("map50_95", 0),
+                "precision": mr.get("precision_val", 0),
+                "recall": mr.get("recall_val", 0),
+            }),
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{host}/api/2.1/unity-catalog/model-versions",
+            data=create_version_payload, headers=hdr, method="POST")
+        resp_data = urllib.request.urlopen(req, timeout=30)
+        version_resp = json.loads(resp_data.read())
+        uc_version = version_resp.get("model_version", {}).get("version", version_resp.get("version"))
+        logger.info(f"Created UC model version: {uc_full_name} v{uc_version}")
 
     except Exception as e:
-        logger.warning(f"UC/MLflow registration failed (non-fatal): {e}", exc_info=True)
-        # Non-fatal: model is still published in the app DB
+        uc_error = str(e)
+        logger.error(f"UC registration failed: {e}", exc_info=True)
 
     result = {"model_id": model_id, "activated": True}
-    if uc_model_name:
-        result["uc_model"] = uc_model_name
+    if uc_full_name:
+        result["uc_model"] = uc_full_name
     if uc_version:
-        result["uc_version"] = uc_version
+        result["uc_version"] = str(uc_version)
+    if uc_error:
+        result["uc_error"] = uc_error
     return result
 
 
