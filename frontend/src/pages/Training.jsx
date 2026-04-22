@@ -6,7 +6,6 @@ import {
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
   startTrainingJob, fetchTrainingJobs, fetchJobDetail, publishJobModel,
   fetchUCModels, activateUCModel, deleteUCModel,
-  fetchTrainingStats,
   fetchConfigFixtureTypes,
   fetchContexts, fetchContextObjectTypes,
 } from '../api';
@@ -489,10 +488,10 @@ function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
    ================================================================ */
 function DatasetsTab({ fixtureTypes, contexts }) {
   const [groups, setGroups] = useState([]);
-  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [deletingGroup, setDeletingGroup] = useState(null);
 
   // Expand/annotate state
   const [openGroup, setOpenGroup] = useState(null);
@@ -510,6 +509,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
   // Training modal
   const [trainGroup, setTrainGroup] = useState(null);
+  const [trainDataset, setTrainDataset] = useState('');
   const [trainModelName, setTrainModelName] = useState('');
   const [trainModelSize, setTrainModelSize] = useState('s');
   const [trainEpochs, setTrainEpochs] = useState(100);
@@ -532,7 +532,6 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       .then(grps => setGroups(Array.isArray(grps) ? grps : []))
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-    fetchTrainingStats().then(st => setStats(st)).catch(() => {});
     fetchTrainingJobs()
       .then(resp => setJobs(resp.jobs || resp || []))
       .catch(() => {});
@@ -563,11 +562,15 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
   const handleDeleteGroup = async (sourceName) => {
     if (!window.confirm(`Excluir dataset "${sourceName}" e todos os frames?`)) return;
+    setDeletingGroup(sourceName);
     try {
       await deleteTrainingGroup(sourceName);
-      load();
       if (openGroup === sourceName) { setOpenGroup(null); setFrames([]); }
+      setGroups(prev => prev.filter(g => g.source_name !== sourceName));
+      setSuccessMsg('Dataset excluido com sucesso');
+      setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err) { setError(err.message); }
+    setDeletingGroup(null);
   };
 
   const handleAutoAnnotateGroup = async (sourceName) => {
@@ -639,11 +642,14 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
   // Training modal handlers
   const openTrainModal = () => {
+    const annotated = groups.filter(g => g.total_annotations > 0);
+    setTrainDataset(annotated.length === 1 ? annotated[0].source_name : '');
     setTrainModelName(`yolo_${trainModelSize}_e${trainEpochs}`);
     setTrainGroup(true);
   };
 
   const handleStartTraining = async () => {
+    if (!trainDataset) { setError('Selecione um dataset'); return; }
     setStartingTrain(true);
     setError(null);
     try {
@@ -652,6 +658,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
         epochs: trainEpochs,
         batch_size: trainBatchSize,
         model_name: trainModelName,
+        dataset_name: trainDataset,
       });
       setTrainGroup(null);
       setSuccessMsg('Treinamento iniciado! Acompanhe abaixo.');
@@ -716,23 +723,6 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
       {successMsg && <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
 
-      {/* Stats bar */}
-      {stats && (
-        <div className="training-stats-bar">
-          <div className="training-stat">
-            <span className="training-stat-value">{stats.total_images || 0}</span>
-            <span className="training-stat-label">Frames</span>
-          </div>
-          <div className="training-stat">
-            <span className="training-stat-value">{stats.total_annotations || 0}</span>
-            <span className="training-stat-label">Anotacoes</span>
-          </div>
-          {Object.entries(stats.annotations_by_type || {}).map(([type, count]) => (
-            <span key={type} className="fixture-type-badge" style={{ background: TYPE_COLORS[type] || '#888' }}>{type}: {count}</span>
-          ))}
-        </div>
-      )}
-
       {/* Publish Modal */}
       {publishModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -761,6 +751,17 @@ function DatasetsTab({ fixtureTypes, contexts }) {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 560, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <h3 style={{ margin: '0 0 20px' }}>Iniciar Treinamento</h3>
+
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Dataset</label>
+            <select className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 16 }}
+              value={trainDataset} onChange={e => setTrainDataset(e.target.value)}>
+              <option value="">Selecione um dataset...</option>
+              {groups.filter(g => g.total_annotations > 0).map(g => (
+                <option key={g.source_name} value={g.source_name}>
+                  {g.source_name} ({g.frame_count} frames, {g.total_annotations} anotacoes{g.context_name ? ` - ${g.context_name}` : ''})
+                </option>
+              ))}
+            </select>
 
             <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo</label>
             <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 16 }}
@@ -798,7 +799,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setTrainGroup(null)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handleStartTraining} disabled={startingTrain || !trainModelName}>
+              <button className="btn btn-primary" onClick={handleStartTraining} disabled={startingTrain || !trainModelName || !trainDataset}>
                 {startingTrain ? 'Iniciando...' : 'Iniciar Treinamento'}
               </button>
             </div>
@@ -822,31 +823,38 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {groups.map(g => (
-            <div key={g.source_name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div key={g.source_name} className="card" style={{ padding: 0, overflow: 'hidden', opacity: deletingGroup === g.source_name ? 0.5 : 1, transition: 'opacity 0.2s' }}>
               <div className="training-group-header" onClick={() => handleOpenGroup(g.source_name)}>
                 <img src={g.thumbnail_url} alt="" className="training-group-thumb" />
                 <div className="training-group-info">
                   <div className="training-group-name">{g.source_name}</div>
                   <div className="training-group-meta">
                     {g.frame_count} frame{g.frame_count !== 1 ? 's' : ''} | {g.total_annotations || 0} anotacoes
+                    {g.context_name && <span style={{ marginLeft: 8, background: '#EEF2FF', color: '#4338CA', padding: '2px 8px', borderRadius: 10, fontSize: 11 }}>{g.context_name}</span>}
                   </div>
                 </div>
                 <div className="training-group-actions" onClick={e => e.stopPropagation()}>
-                  {g.has_video && (
-                    <button className="btn btn-sm" onClick={() => setPlayingGroup(playingGroup === g.source_name ? null : g.source_name)}>
-                      {playingGroup === g.source_name ? 'Parar' : 'Play'}
-                    </button>
+                  {deletingGroup === g.source_name ? (
+                    <span style={{ fontSize: 13, color: '#6B7280' }}>Excluindo...</span>
+                  ) : (
+                    <>
+                      {g.has_video && (
+                        <button className="btn btn-sm" onClick={() => setPlayingGroup(playingGroup === g.source_name ? null : g.source_name)}>
+                          {playingGroup === g.source_name ? 'Parar' : 'Play'}
+                        </button>
+                      )}
+                      <button className="btn btn-sm btn-primary" onClick={() => handleOpenGroup(g.source_name)}>
+                        {openGroup === g.source_name ? 'Fechar' : 'Anotar'}
+                      </button>
+                      <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
+                        onClick={() => handleAutoAnnotateGroup(g.source_name)}>
+                        {autoAnnotatingGroup === g.source_name
+                          ? (annotateProgress ? `${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando...')
+                          : 'Auto-anotar IA'}
+                      </button>
+                      <button className="btn btn-sm btn-danger" onClick={() => handleDeleteGroup(g.source_name)}>Excluir</button>
+                    </>
                   )}
-                  <button className="btn btn-sm btn-primary" onClick={() => handleOpenGroup(g.source_name)}>
-                    {openGroup === g.source_name ? 'Fechar' : 'Anotar'}
-                  </button>
-                  <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
-                    onClick={() => handleAutoAnnotateGroup(g.source_name)}>
-                    {autoAnnotatingGroup === g.source_name
-                      ? (annotateProgress ? `${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando...')
-                      : 'Auto-anotar IA'}
-                  </button>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDeleteGroup(g.source_name)}>Excluir</button>
                 </div>
               </div>
 
@@ -941,6 +949,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                       {job.model_name && <span style={{ fontSize: 13, fontWeight: 600 }}>{job.model_name}</span>}
                       <span className="training-job-model">{job.model_size || '-'}</span>
                       <span className="training-job-params">{job.epochs}ep / batch{job.batch_size}</span>
+                      {job.dataset_name && <span style={{ fontSize: 12, color: '#6B7280', marginLeft: 4 }}>| Dataset: {job.dataset_name}</span>}
                     </div>
                     <div className="training-job-header-right">
                       <span className="training-job-duration">{formatDuration(job.duration_seconds)}</span>

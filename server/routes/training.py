@@ -46,6 +46,7 @@ class StartJobPayload(BaseModel):
     cluster_spec: Optional[dict] = None
     context_id: Optional[int] = None
     model_name: Optional[str] = None
+    dataset_name: Optional[str] = None
 
 
 class DetectionModePayload(BaseModel):
@@ -128,6 +129,7 @@ def create_training_tables(conn):
         "ALTER TABLE training_images ADD COLUMN IF NOT EXISTS source_group VARCHAR(500)",
         "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS results_path VARCHAR(1000)",
         "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS model_name VARCHAR(200)",
+        "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS dataset_name VARCHAR(500)",
     ]:
         try:
             cur.execute(alter_sql)
@@ -376,15 +378,25 @@ async def list_training_groups(context_id: int = Query(None)):
             SUM(COALESCE(annotation_count, 0)) FILTER (WHERE annotation_count >= 0) as total_annotations,
             MIN(image_id) FILTER (WHERE annotation_count >= 0) as first_image_id,
             MIN(uploaded_at) as uploaded_at,
-            BOOL_OR(filename LIKE '%%_original.%%') as has_video
+            BOOL_OR(filename LIKE '%%_original.%%') as has_video,
+            MAX(context_id) as context_id
         FROM training_images{ctx_cond}
         GROUP BY COALESCE(source_group, filename)
         ORDER BY MIN(uploaded_at) DESC
     """, params)
+    # Resolve context names
+    ctx_names = {}
+    try:
+        ctx_rows = execute_query("SELECT context_id, display_name, name FROM contexts")
+        for r in ctx_rows:
+            ctx_names[r["context_id"]] = r.get("display_name") or r.get("name") or ""
+    except Exception:
+        pass
     for g in groups:
         g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
         if g.get("has_video"):
             g["video_url"] = f"/api/training/groups/{g['source_name']}/video"
+        g["context_name"] = ctx_names.get(g.get("context_id"), "")
     return groups
 
 
@@ -909,10 +921,10 @@ async def start_training_job(payload: StartJobPayload):
     # Save initial job record
     execute_update("""
         INSERT INTO training_jobs
-        (job_id, model_size, epochs, batch_size, status, started_at, context_id, model_name)
-        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW(), %(ctx)s, %(mn)s)
+        (job_id, model_size, epochs, batch_size, status, started_at, context_id, model_name, dataset_name)
+        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW(), %(ctx)s, %(mn)s, %(dn)s)
     """, {"jid": job_id, "ms": payload.model_size, "ep": payload.epochs, "bs": payload.batch_size,
-          "ctx": payload.context_id, "mn": payload.model_name})
+          "ctx": payload.context_id, "mn": payload.model_name, "dn": payload.dataset_name})
 
     try:
         # Step 1: Export dataset
