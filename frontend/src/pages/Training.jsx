@@ -4,7 +4,7 @@ import {
   autoAnnotateGroup, autoAnnotateGroupStatus, fetchActiveAutoAnnotations, fetchGroupAnnotations,
   uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
-  startTrainingJob, fetchTrainingJobs, fetchJobDetail, publishJobModel,
+  startTrainingJob, fetchTrainingJobs, fetchJobDetail, deleteTrainingJob, publishJobModel,
   fetchUCModels, activateUCModel, deleteUCModel,
   fetchConfigFixtureTypes,
   fetchContexts, fetchContextObjectTypes,
@@ -605,7 +605,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
   // Training modal
   const [trainGroup, setTrainGroup] = useState(null);
-  const [trainDataset, setTrainDataset] = useState('');
+  const [trainDatasets, setTrainDatasets] = useState([]);
   const [trainModelName, setTrainModelName] = useState('');
   const [trainModelSize, setTrainModelSize] = useState('s');
   const [trainEpochs, setTrainEpochs] = useState(100);
@@ -620,6 +620,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
   const [publishing, setPublishing] = useState(null);
   const [publishModal, setPublishModal] = useState(null);
   const [publishName, setPublishName] = useState('');
+  const [deletingJob, setDeletingJob] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -770,13 +771,33 @@ function DatasetsTab({ fixtureTypes, contexts }) {
   // Training modal handlers
   const openTrainModal = () => {
     const annotated = groups.filter(g => g.total_annotations > 0);
-    setTrainDataset(annotated.length === 1 ? annotated[0].source_name : '');
+    setTrainDatasets(annotated.length === 1 ? [annotated[0].source_name] : []);
     setTrainModelName(`yolo_${trainModelSize}_e${trainEpochs}`);
     setTrainGroup(true);
   };
 
+  // Determine which context is selected based on chosen datasets
+  const selectedTrainContext = (() => {
+    if (trainDatasets.length === 0) return null;
+    const first = groups.find(g => g.source_name === trainDatasets[0]);
+    return first?.context_id || null;
+  })();
+
+  const toggleTrainDataset = (sourceName) => {
+    setTrainDatasets(prev => {
+      if (prev.includes(sourceName)) return prev.filter(s => s !== sourceName);
+      // Check context compatibility
+      const target = groups.find(g => g.source_name === sourceName);
+      if (prev.length > 0) {
+        const first = groups.find(g => g.source_name === prev[0]);
+        if (first && target && first.context_id !== target.context_id) return prev; // block different context
+      }
+      return [...prev, sourceName];
+    });
+  };
+
   const handleStartTraining = async () => {
-    if (!trainDataset) { setError('Selecione um dataset'); return; }
+    if (trainDatasets.length === 0) { setError('Selecione pelo menos um dataset'); return; }
     setStartingTrain(true);
     setError(null);
     try {
@@ -785,7 +806,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
         epochs: trainEpochs,
         batch_size: trainBatchSize,
         model_name: trainModelName,
-        dataset_name: trainDataset,
+        dataset_name: trainDatasets.join(', '),
       });
       setTrainGroup(null);
       setSuccessMsg('Treinamento iniciado! Acompanhe abaixo.');
@@ -827,6 +848,18 @@ function DatasetsTab({ fixtureTypes, contexts }) {
       setTimeout(() => setSuccessMsg(null), 10000);
     } catch (err) { setError(`Falha ao publicar: ${err.message}`); }
     setPublishing(null);
+  };
+
+  const handleDeleteJob = async (jobId) => {
+    if (!window.confirm('Excluir este treinamento?')) return;
+    setDeletingJob(jobId);
+    try {
+      await deleteTrainingJob(jobId);
+      setJobs(prev => prev.filter(j => j.job_id !== jobId));
+      setSuccessMsg('Treinamento excluido');
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err) { setError(err.message); }
+    setDeletingJob(null);
   };
 
   const formatDuration = (seconds) => {
@@ -879,16 +912,34 @@ function DatasetsTab({ fixtureTypes, contexts }) {
           <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 560, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <h3 style={{ margin: '0 0 20px' }}>Iniciar Treinamento</h3>
 
-            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Dataset</label>
-            <select className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 16 }}
-              value={trainDataset} onChange={e => setTrainDataset(e.target.value)}>
-              <option value="">Selecione um dataset...</option>
-              {groups.filter(g => g.total_annotations > 0).map(g => (
-                <option key={g.source_name} value={g.source_name}>
-                  {g.source_name} ({g.frame_count} frames, {g.total_annotations} anotacoes{g.context_name ? ` - ${g.context_name}` : ''})
-                </option>
-              ))}
-            </select>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>
+              Datasets {trainDatasets.length > 0 && <span style={{ fontWeight: 400, color: '#6B7280' }}>({trainDatasets.length} selecionado{trainDatasets.length > 1 ? 's' : ''})</span>}
+            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16, maxHeight: 180, overflow: 'auto' }}>
+              {groups.filter(g => g.total_annotations > 0).map(g => {
+                const checked = trainDatasets.includes(g.source_name);
+                const differentContext = selectedTrainContext && g.context_id !== selectedTrainContext && !checked;
+                return (
+                  <label key={g.source_name} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, cursor: differentContext ? 'not-allowed' : 'pointer',
+                    border: checked ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                    background: checked ? '#FFF1F2' : differentContext ? '#F9FAFB' : '#fff',
+                    opacity: differentContext ? 0.45 : 1,
+                  }}>
+                    <input type="checkbox" checked={checked} disabled={differentContext}
+                      onChange={() => toggleTrainDataset(g.source_name)} style={{ accentColor: 'var(--app-primary)' }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{g.source_name}</div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>
+                        {g.frame_count} frames, {g.total_annotations} anotacoes
+                        {g.context_name && <span style={{ marginLeft: 6, background: '#EEF2FF', color: '#4338CA', padding: '1px 6px', borderRadius: 8, fontSize: 10 }}>{g.context_name}</span>}
+                      </div>
+                    </div>
+                    {differentContext && <span style={{ fontSize: 10, color: '#9CA3AF' }}>Contexto diferente</span>}
+                  </label>
+                );
+              })}
+            </div>
 
             <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo</label>
             <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 16 }}
@@ -926,7 +977,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
 
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setTrainGroup(null)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handleStartTraining} disabled={startingTrain || !trainModelName || !trainDataset}>
+              <button className="btn btn-primary" onClick={handleStartTraining} disabled={startingTrain || !trainModelName || trainDatasets.length === 0}>
                 {startingTrain ? 'Iniciando...' : 'Iniciar Treinamento'}
               </button>
             </div>
@@ -1077,7 +1128,7 @@ function DatasetsTab({ fixtureTypes, contexts }) {
               const detail = jobDetails[job.job_id];
               const isExpanded = expandedJobId === job.job_id;
               return (
-                <div key={job.job_id} className="card training-job-card">
+                <div key={job.job_id} className="card training-job-card" style={{ opacity: deletingJob === job.job_id ? 0.5 : 1, transition: 'opacity 0.2s' }}>
                   <div className="training-job-header" onClick={() => handleExpandJob(job.job_id)}>
                     <div className="training-job-header-left">
                       <span className="status-badge" style={{ background: JOB_STATUS_COLORS[job.status] || '#666' }}>
@@ -1088,8 +1139,14 @@ function DatasetsTab({ fixtureTypes, contexts }) {
                       <span className="training-job-params">{job.epochs}ep / batch{job.batch_size}</span>
                       {job.dataset_name && <span style={{ fontSize: 12, color: '#6B7280', marginLeft: 4 }}>| Dataset: {job.dataset_name}</span>}
                     </div>
-                    <div className="training-job-header-right">
+                    <div className="training-job-header-right" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span className="training-job-duration">{formatDuration(job.duration_seconds)}</span>
+                      {deletingJob === job.job_id ? (
+                        <span style={{ fontSize: 12, color: '#6B7280' }}>Excluindo...</span>
+                      ) : (
+                        <button className="btn btn-sm btn-danger" onClick={e => { e.stopPropagation(); handleDeleteJob(job.job_id); }}
+                          style={{ padding: '2px 8px', fontSize: 11 }}>Excluir</button>
+                      )}
                       <span className="training-job-expand">{isExpanded ? '▲' : '▼'}</span>
                     </div>
                   </div>

@@ -1205,6 +1205,19 @@ async def poll_job_status(job_id: int):
         }
 
 
+@router.delete("/jobs/{job_id}")
+async def delete_training_job(job_id: int):
+    """Delete a training job and associated models."""
+    rows = execute_query("SELECT job_id FROM training_jobs WHERE job_id = %(jid)s", {"jid": job_id})
+    if not rows:
+        raise HTTPException(404, "Job not found")
+
+    execute_update("DELETE FROM trained_models WHERE job_id = %(jid)s", {"jid": job_id})
+    execute_update("DELETE FROM training_jobs WHERE job_id = %(jid)s", {"jid": job_id})
+
+    return {"deleted": True, "job_id": job_id}
+
+
 # ===========================================================================
 # Trained Models
 # ===========================================================================

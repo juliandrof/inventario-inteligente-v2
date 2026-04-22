@@ -115,6 +115,7 @@ export const autoAnnotate = (id) => request(`/training/images/${id}/auto-annotat
 export const startTrainingJob = (params) => request('/training/jobs/start', { method: 'POST', body: JSON.stringify(params) });
 export const fetchTrainingJobs = () => request('/training/jobs');
 export const fetchJobDetail = (id) => request(`/training/jobs/${id}`);
+export const deleteTrainingJob = (id) => request(`/training/jobs/${id}`, { method: 'DELETE' });
 export const pollJobStatus = (id) => request(`/training/jobs/${id}/status`);
 export const fetchTrainedModels = () => request('/training/models');
 export const activateModel = (id) => request(`/training/models/${id}/activate`, { method: 'POST' });
