@@ -1294,30 +1294,35 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
 
         import mlflow
         import mlflow.pyfunc
+        from mlflow.models.signature import ModelSignature
+        from mlflow.types.schema import Schema, ColSpec
         mlflow.set_tracking_uri("databricks")
         mlflow.set_registry_uri("databricks-uc")
         mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
 
         with mlflow.start_run(run_name=f"publish_{uc_short_name}") as run:
-            # Log metrics
             for key, val in [("map50", mr.get("map50")), ("map50_95", mr.get("map50_95")),
                              ("precision", mr.get("precision_val")), ("recall", mr.get("recall_val"))]:
                 if val:
                     mlflow.log_metric(key, float(val))
             mlflow.log_params({"model_size": job.get("model_size", "?"), "epochs": job.get("epochs", "?")})
 
-            # Log as pyfunc model (creates MLmodel descriptor that UC requires)
             class _YOLOWrapper(mlflow.pyfunc.PythonModel):
                 def predict(self, context, model_input):
                     return []
+
+            signature = ModelSignature(
+                inputs=Schema([ColSpec("binary", "image")]),
+                outputs=Schema([ColSpec("string", "detections")]),
+            )
 
             mlflow.pyfunc.log_model(
                 artifact_path="model",
                 python_model=_YOLOWrapper(),
                 artifacts={"weights": local_model},
+                signature=signature,
             )
 
-            # Register in UC
             model_uri = f"runs:/{run.info.run_id}/model"
             registered = mlflow.register_model(model_uri, uc_full_name)
             uc_version = registered.version
