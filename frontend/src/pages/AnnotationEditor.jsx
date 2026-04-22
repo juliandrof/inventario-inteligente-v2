@@ -478,7 +478,7 @@ function AnnotationEditor({ imageId, imageSrc, initialAnnotations, fixtureTypes,
           {/* Sidebar */}
           <div className="annotation-sidebar">
             <div className="annotation-sidebar-section">
-              <h4>Tipo de Expositor</h4>
+              <h4>Tipo de Objeto</h4>
               <div className="annotation-type-buttons">
                 {(fixtureTypes || []).map(ft => (
                   <button

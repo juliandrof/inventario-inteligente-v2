@@ -130,7 +130,7 @@ function VideoList({ navigate, pageParams }) {
                   </span>
                 ))}
                 {(!v.type_counts || Object.keys(v.type_counts).length === 0) && v.fixture_count > 0 && (
-                  <span className="det-tag" style={{ background: '#666' }}>{v.fixture_count} expositores</span>
+                  <span className="det-tag" style={{ background: '#666' }}>{v.fixture_count} deteccoes</span>
                 )}
               </div>
 
@@ -161,7 +161,7 @@ function VideoList({ navigate, pageParams }) {
                       ))}
                     </div>
                   ) : (
-                    <div className="empty-state">Nenhum expositor</div>
+                    <div className="empty-state">Nenhum objeto detectado</div>
                   )}
                 </div>
               )}

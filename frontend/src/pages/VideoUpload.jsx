@@ -1,16 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { uploadVideo, fetchServingEndpoints, fetchDetectionMode, setDetectionMode, updateConfig, fetchConfigs, fetchTrainedModels, activateModel } from '../api';
-
-const UF_REGEX = /^[A-Z]{2}_[A-Za-z0-9]+_\d{8}\.\w+$/;
-const VALID_UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+import { uploadVideo, fetchServingEndpoints, fetchDetectionMode, setDetectionMode, updateConfig, fetchConfigs, fetchTrainedModels, activateModel, fetchContexts, createContext } from '../api';
 
 const DETECTION_MODES = [
-  { key: 'LLM', label: 'LLM', icon: '🧠', desc: 'Modelo multimodal (Claude, GPT, Gemini) analisa cada frame e identifica expositores.' },
+  { key: 'LLM', label: 'LLM', icon: '🧠', desc: 'Modelo multimodal (Claude, GPT, Gemini) analisa cada frame e identifica objetos.' },
   { key: 'YOLO', label: 'YOLO', icon: '⚡', desc: 'Modelo YOLO treinado com seus dados. Deteccao rapida e precisa.' },
-  { key: 'HYBRID', label: 'Hibrido', icon: '🔄', desc: 'YOLO detecta bounding boxes + LLM classifica e descreve cada expositor.' },
+  { key: 'HYBRID', label: 'Hibrido', icon: '🔄', desc: 'YOLO detecta bounding boxes + LLM classifica e descreve cada objeto.' },
 ];
 
 const IMAGE_EXTS = ['jpg','jpeg','png','bmp','webp','tiff','tif'];
+
+const CONTEXT_ICONS = ['🏪','🔧','🚗','📦','🏭','🏗️','🛒','🔬','🏥','📷','🎯','🔍'];
 
 function VideoUpload({ navigate }) {
   const [step, setStep] = useState(1);
@@ -18,7 +17,14 @@ function VideoUpload({ navigate }) {
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef();
 
-  // Step 2 state
+  // Step 1 state - Context
+  const [contexts, setContexts] = useState([]);
+  const [selectedContext, setSelectedContext] = useState(null);
+  const [loadingContexts, setLoadingContexts] = useState(true);
+  const [showNewContext, setShowNewContext] = useState(false);
+  const [newCtx, setNewCtx] = useState({ name: '', display_name: '', description: '', icon: '🎯' });
+
+  // Step 3 state - Detection mode
   const [detectionMode, setDetectionModeLocal] = useState('LLM');
   const [selectedLLM, setSelectedLLM] = useState('');
   const [customEndpoint, setCustomEndpoint] = useState('');
@@ -27,15 +33,24 @@ function VideoUpload({ navigate }) {
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [yoloModels, setYoloModels] = useState([]);
 
-  // Step 3 state
+  // Step 4 state - Processing
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
 
-  // Load endpoints + models when entering step 2
+  // Load contexts on mount
   useEffect(() => {
-    if (step !== 2) return;
+    setLoadingContexts(true);
+    fetchContexts()
+      .then(ctxs => setContexts(Array.isArray(ctxs) ? ctxs : []))
+      .catch(() => setContexts([]))
+      .finally(() => setLoadingContexts(false));
+  }, []);
+
+  // Load endpoints + models when entering step 3
+  useEffect(() => {
+    if (step !== 3) return;
     setLoadingEndpoints(true);
     Promise.all([
       fetchServingEndpoints().catch(() => []),
@@ -51,25 +66,11 @@ function VideoUpload({ navigate }) {
     }).finally(() => setLoadingEndpoints(false));
   }, [step]);
 
-  function validateFilename(name) {
-    if (!UF_REGEX.test(name)) return 'Formato invalido. Use: UF_IDLOJA_yyyymmdd.ext';
-    const parts = name.split('_');
-    if (!VALID_UFS.includes(parts[0].toUpperCase())) return `UF invalida: ${parts[0]}`;
-    const dateStr = parts[2].split('.')[0];
-    const y = parseInt(dateStr.substring(0, 4)), m = parseInt(dateStr.substring(4, 6)), d = parseInt(dateStr.substring(6, 8));
-    if (isNaN(y) || isNaN(m) || isNaN(d) || m < 1 || m > 12 || d < 1 || d > 31) return `Data invalida: ${dateStr}`;
-    return null;
-  }
-
   function isPhoto(name) { return IMAGE_EXTS.includes(name.split('.').pop()?.toLowerCase()); }
 
   function handleFiles(fileList) {
     const arr = Array.from(fileList).map(f => ({
       file: f, name: f.name, size: f.size,
-      error: validateFilename(f.name),
-      uf: f.name.split('_')[0]?.toUpperCase(),
-      store: f.name.split('_')[1],
-      date: f.name.split('_')[2]?.split('.')[0],
       mediaType: isPhoto(f.name) ? 'Foto' : 'Video',
     }));
     setFiles(prev => [...prev, ...arr]);
@@ -77,12 +78,18 @@ function VideoUpload({ navigate }) {
 
   function removeFile(idx) { setFiles(f => f.filter((_, i) => i !== idx)); }
 
-  const validCount = files.filter(f => !f.error).length;
+  const fileCount = files.length;
 
   const goToStep2 = () => {
-    if (!validCount) { setError('Nenhum arquivo valido selecionado'); return; }
+    if (!selectedContext) { setError('Selecione um contexto'); return; }
     setError(null);
     setStep(2);
+  };
+
+  const goToStep3 = () => {
+    if (!fileCount) { setError('Nenhum arquivo selecionado'); return; }
+    setError(null);
+    setStep(3);
   };
 
   const effectiveLLM = useCustom ? customEndpoint : selectedLLM;
@@ -93,10 +100,29 @@ function VideoUpload({ navigate }) {
     return true;
   };
 
+  async function handleCreateContext() {
+    if (!newCtx.name) return;
+    try {
+      const created = await createContext({
+        name: newCtx.name.toUpperCase().replace(/\s+/g, '_'),
+        display_name: newCtx.display_name || newCtx.name,
+        description: newCtx.description,
+        icon: newCtx.icon,
+      });
+      const updated = await fetchContexts();
+      setContexts(Array.isArray(updated) ? updated : []);
+      setSelectedContext(created.context_id || created.id);
+      setShowNewContext(false);
+      setNewCtx({ name: '', display_name: '', description: '', icon: '🎯' });
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   async function handleProcess() {
     setError(null);
     setUploading(true);
-    setStep(3);
+    setStep(4);
 
     try {
       // Save detection mode
@@ -109,15 +135,14 @@ function VideoUpload({ navigate }) {
       }
 
       // Upload files
-      const valid = files.filter(f => !f.error);
       const res = [];
-      for (let i = 0; i < valid.length; i++) {
-        setUploadProgress(`Enviando ${valid[i].name} (${i + 1}/${valid.length})...`);
+      for (let i = 0; i < files.length; i++) {
+        setUploadProgress(`Enviando ${files[i].name} (${i + 1}/${files.length})...`);
         try {
-          const r = await uploadVideo(valid[i].file);
-          res.push({ name: valid[i].name, success: true, data: r });
+          const r = await uploadVideo(files[i].file, selectedContext);
+          res.push({ name: files[i].name, success: true, data: r });
         } catch (e) {
-          res.push({ name: valid[i].name, success: false, error: e.message });
+          res.push({ name: files[i].name, success: false, error: e.message });
         }
       }
       setResults(res);
@@ -130,7 +155,7 @@ function VideoUpload({ navigate }) {
     }
   }
 
-  const resetWizard = () => { setStep(1); setFiles([]); setResults([]); setError(null); setUploadProgress(''); };
+  const resetWizard = () => { setStep(1); setFiles([]); setResults([]); setError(null); setUploadProgress(''); setSelectedContext(null); };
 
   const activeYolo = yoloModels.find(m => m.is_active);
   const hasYolo = yoloModels.length > 0;
@@ -144,9 +169,10 @@ function VideoUpload({ navigate }) {
       {/* Wizard steps indicator */}
       <div className="card" style={{ display: 'flex', justifyContent: 'center', gap: 32, padding: '16px 24px' }}>
         {[
-          { n: 1, label: 'Selecionar Arquivos' },
-          { n: 2, label: 'Modo de Deteccao' },
-          { n: 3, label: 'Processar' },
+          { n: 1, label: 'Contexto' },
+          { n: 2, label: 'Selecionar Arquivos' },
+          { n: 3, label: 'Modo de Deteccao' },
+          { n: 4, label: 'Processar' },
         ].map(s => (
           <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: step >= s.n ? 1 : 0.4 }}>
             <div style={{
@@ -161,20 +187,111 @@ function VideoUpload({ navigate }) {
         ))}
       </div>
 
-      {/* ===== STEP 1: File selection ===== */}
+      {/* ===== STEP 1: Context selection ===== */}
       {step === 1 && (
         <>
           <div className="card">
-            <h3>Padrao de Nomenclatura</h3>
-            <div className="naming-guide">
-              <code className="naming-pattern">UF_IDLOJA_yyyymmdd.ext</code>
-              <div className="naming-examples">
-                <span className="example">SP_1234_20260415.mp4</span>
-                <span className="example">RJ_5678_20260410.jpg</span>
+            <h3>Escolha o Contexto de Deteccao</h3>
+            <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 16 }}>
+              O contexto define o que sera procurado nos videos e fotos enviados.
+            </p>
+
+            {loadingContexts ? (
+              <div className="empty-state">Carregando contextos...</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                {contexts.map(ctx => (
+                  <div
+                    key={ctx.context_id || ctx.id}
+                    onClick={() => setSelectedContext(ctx.context_id || ctx.id)}
+                    style={{
+                      padding: '20px 16px', borderRadius: 12, cursor: 'pointer', textAlign: 'center',
+                      border: selectedContext === (ctx.context_id || ctx.id) ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                      background: selectedContext === (ctx.context_id || ctx.id) ? '#FFF1F2' : '#fff',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>{ctx.icon || '🎯'}</div>
+                    <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{ctx.display_name || ctx.name}</div>
+                    {ctx.description && <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.4 }}>{ctx.description}</div>}
+                    {selectedContext === (ctx.context_id || ctx.id) && (
+                      <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
+                    )}
+                  </div>
+                ))}
+
+                {/* Create new context card */}
+                <div
+                  onClick={() => setShowNewContext(true)}
+                  style={{
+                    padding: '20px 16px', borderRadius: 12, cursor: 'pointer', textAlign: 'center',
+                    border: '2px dashed #D1D5DB', background: '#F9FAFB',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    minHeight: 120,
+                  }}
+                >
+                  <div style={{ fontSize: 32, marginBottom: 8, color: '#9CA3AF' }}>+</div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#6B7280' }}>Criar Novo Contexto</div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
+          {/* New context form */}
+          {showNewContext && (
+            <div className="card">
+              <h3>Novo Contexto</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 500 }}>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Icone</label>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {CONTEXT_ICONS.map(icon => (
+                      <span
+                        key={icon}
+                        onClick={() => setNewCtx({ ...newCtx, icon })}
+                        style={{
+                          fontSize: 24, cursor: 'pointer', padding: '4px 8px', borderRadius: 8,
+                          border: newCtx.icon === icon ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                          background: newCtx.icon === icon ? '#FFF1F2' : '#fff',
+                        }}
+                      >{icon}</span>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Nome (codigo)</label>
+                  <input className="inline-input" placeholder="Ex: EXPOSITORES_LOJA" value={newCtx.name}
+                    onChange={e => setNewCtx({ ...newCtx, name: e.target.value })} style={{ width: '100%' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Nome de exibicao</label>
+                  <input className="inline-input" placeholder="Ex: Expositores de Loja" value={newCtx.display_name}
+                    onChange={e => setNewCtx({ ...newCtx, display_name: e.target.value })} style={{ width: '100%' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 4 }}>Descricao</label>
+                  <input className="inline-input" placeholder="O que buscar nos videos" value={newCtx.description}
+                    onChange={e => setNewCtx({ ...newCtx, description: e.target.value })} style={{ width: '100%' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-primary" onClick={handleCreateContext} disabled={!newCtx.name}>Criar Contexto</button>
+                  <button className="btn btn-secondary" onClick={() => setShowNewContext(false)}>Cancelar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 0 16px' }}>
+            <button className="btn btn-primary" onClick={goToStep2} disabled={!selectedContext}>
+              Proximo: Selecionar Arquivos →
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ===== STEP 2: File selection ===== */}
+      {step === 2 && (
+        <>
           <div className="card">
             <div
               className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
@@ -197,35 +314,35 @@ function VideoUpload({ navigate }) {
             <div className="card">
               <h3>Arquivos Selecionados ({files.length})</h3>
               <table className="data-table">
-                <thead><tr><th>Arquivo</th><th>Tipo</th><th>UF</th><th>Loja</th><th>Data</th><th>Tamanho</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Arquivo</th><th>Tipo</th><th>Tamanho</th><th></th></tr></thead>
                 <tbody>
                   {files.map((f, i) => (
-                    <tr key={i} className={f.error ? 'row-error' : ''}>
+                    <tr key={i}>
                       <td className="filename">{f.name}</td>
                       <td><span className={`media-badge ${f.mediaType === 'Foto' ? 'photo' : 'video'}`}>{f.mediaType}</span></td>
-                      <td>{f.uf && <span className="uf-badge">{f.uf}</span>}</td>
-                      <td>{f.store || '-'}</td>
-                      <td>{f.date ? `${f.date.substring(0,4)}-${f.date.substring(4,6)}-${f.date.substring(6,8)}` : '-'}</td>
                       <td>{(f.size / 1024 / 1024).toFixed(1)} MB</td>
-                      <td>{f.error ? <span className="error-text">{f.error}</span> : <span className="ok-text">Valido</span>}</td>
                       <td><button className="btn-icon" onClick={() => removeFile(i)}>X</button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="upload-actions" style={{ justifyContent: 'space-between' }}>
-                <button className="btn btn-secondary" onClick={() => setFiles([])}>Limpar</button>
-                <button className="btn btn-primary" onClick={goToStep2} disabled={!validCount}>
-                  Proximo: Escolher Deteccao →
-                </button>
-              </div>
             </div>
           )}
+
+          <div className="upload-actions" style={{ display: 'flex', justifyContent: 'space-between', padding: '0 0 16px' }}>
+            <button className="btn" onClick={() => setStep(1)} style={{ background: '#6B7280', color: '#fff' }}>← Voltar</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {files.length > 0 && <button className="btn btn-secondary" onClick={() => setFiles([])}>Limpar</button>}
+              <button className="btn btn-primary" onClick={goToStep3} disabled={!fileCount}>
+                Proximo: Escolher Deteccao →
+              </button>
+            </div>
+          </div>
         </>
       )}
 
-      {/* ===== STEP 2: Detection mode + LLM selection ===== */}
-      {step === 2 && (
+      {/* ===== STEP 3: Detection mode + LLM selection ===== */}
+      {step === 3 && (
         <>
           <div className="card">
             <h3>Escolha o modo de deteccao</h3>
@@ -341,16 +458,16 @@ function VideoUpload({ navigate }) {
           )}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 0 16px' }}>
-            <button className="btn" onClick={() => setStep(1)} style={{ background: '#6B7280', color: '#fff' }}>← Voltar</button>
+            <button className="btn" onClick={() => setStep(2)} style={{ background: '#6B7280', color: '#fff' }}>← Voltar</button>
             <button className="btn btn-primary" onClick={handleProcess} disabled={!canProcess()}>
-              Processar {validCount} arquivo(s) →
+              Processar {fileCount} arquivo(s) →
             </button>
           </div>
         </>
       )}
 
-      {/* ===== STEP 3: Processing / Results ===== */}
-      {step === 3 && (
+      {/* ===== STEP 4: Processing / Results ===== */}
+      {step === 4 && (
         <div className="card" style={{ textAlign: 'center', padding: 40 }}>
           {uploading && (
             <>

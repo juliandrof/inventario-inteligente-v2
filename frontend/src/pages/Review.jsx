@@ -85,7 +85,7 @@ function Review({ pageParams }) {
           <h3>Selecione um video para revisar</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Arquivo</th><th>Loja</th><th>UF</th><th>Data</th><th>Frames</th><th>Deteccoes</th><th>Expositores</th><th></th></tr>
+              <tr><th>Arquivo</th><th>Loja</th><th>UF</th><th>Data</th><th>Frames</th><th>Deteccoes</th><th>Objetos</th><th></th></tr>
             </thead>
             <tbody>
               {videos.map(v => (
@@ -119,7 +119,7 @@ function Review({ pageParams }) {
                   <span className="uf-badge">{reviewData.video.uf}</span>
                   <span>Loja {reviewData.video.store_id}</span>
                   <span>{reviewData.video.video_date}</span>
-                  <span><strong>{reviewData.total_fixtures}</strong> expositores unicos</span>
+                  <span><strong>{reviewData.total_fixtures}</strong> objetos unicos</span>
                 </div>
               </div>
               <button className="btn btn-secondary" onClick={() => { setSelectedVideo(null); setReviewData(null); setFilterType(''); }}>
@@ -165,7 +165,7 @@ function Review({ pageParams }) {
           </div>
 
           {filteredFixtures.length === 0 && (
-            <div className="card"><div className="empty-state">Nenhum expositor{filterType ? ` do tipo ${filterType}` : ''}</div></div>
+            <div className="card"><div className="empty-state">Nenhum objeto{filterType ? ` do tipo ${filterType}` : ''}</div></div>
           )}
         </>
       )}
@@ -186,7 +186,7 @@ function Review({ pageParams }) {
 
             {frameData && (
               <>
-                <p className="modal-info">Este expositor apareceu em <strong>{frameData.total}</strong> frame(s) analisados</p>
+                <p className="modal-info">Este objeto apareceu em <strong>{frameData.total}</strong> frame(s) analisados</p>
                 <div className="modal-frame-grid">
                   {frameData.frames.map((fr, i) => (
                     <div key={i} className="modal-frame-card">

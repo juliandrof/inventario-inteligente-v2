@@ -61,7 +61,7 @@ function Reports() {
 
       {tab === 'summary' && (
         <div className="card">
-          <h3>Resumo de Expositores por Loja</h3>
+          <h3>Resumo de Objetos por Loja</h3>
           <table className="data-table">
             <thead>
               <tr><th>UF</th><th>Loja</th><th>Data</th><th>Tipo</th><th>Qtd</th><th>Ocupacao</th><th>Vazio</th><th>Parcial</th><th>Cheio</th></tr>
@@ -91,7 +91,7 @@ function Reports() {
           <h3>Comparativo entre Lojas</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Loja</th><th>UF</th><th>Total Expositores</th><th>Ocupacao Media</th></tr>
+              <tr><th>Loja</th><th>UF</th><th>Total Deteccoes</th><th>Ocupacao Media</th></tr>
             </thead>
             <tbody>
               {comparison.map((r, i) => (

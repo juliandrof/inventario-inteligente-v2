@@ -34,9 +34,10 @@ export const fetchVideo = (id) => request(`/videos/${id}`);
 export const fetchVideoFixtures = (id) => request(`/videos/${id}/fixtures`);
 export const deleteVideo = (id) => request(`/videos/${id}`, { method: 'DELETE' });
 export const reprocessVideo = (id) => request(`/videos/reprocess/${id}`, { method: 'POST' });
-export const uploadVideo = async (file) => {
+export const uploadVideo = async (file, contextId) => {
   const formData = new FormData();
   formData.append('file', file);
+  if (contextId) formData.append('context_id', contextId);
   const res = await fetch(`${BASE_URL}/videos/upload`, { method: 'POST', body: formData });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -94,9 +95,10 @@ export const fetchGroupAnnotations = (sourceName) => request(`/training/groups/$
 
 // Training - Images
 export const fetchTrainingImages = () => request('/training/images');
-export const uploadTrainingImage = async (file) => {
+export const uploadTrainingImage = async (file, contextId) => {
   const formData = new FormData();
   formData.append('file', file);
+  if (contextId) formData.append('context_id', contextId);
   const res = await fetch(`${BASE_URL}/training/images/upload`, { method: 'POST', body: formData });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -116,3 +118,14 @@ export const deleteModel = (id) => request(`/training/models/${id}`, { method: '
 export const fetchDetectionMode = () => request('/training/detection-mode');
 export const setDetectionMode = (mode) => request('/training/detection-mode', { method: 'PUT', body: JSON.stringify({ mode }) });
 export const fetchTrainingStats = () => request('/training/stats');
+
+// Contexts
+export const fetchContexts = () => request('/contexts');
+export const fetchContext = (id) => request(`/contexts/${id}`);
+export const createContext = (data) => request('/contexts', { method: 'POST', body: JSON.stringify(data) });
+export const updateContextApi = (id, data) => request(`/contexts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteContextApi = (id) => request(`/contexts/${id}`, { method: 'DELETE' });
+export const fetchContextObjectTypes = (contextId) => request(`/contexts/${contextId}/object-types`);
+export const createContextObjectType = (contextId, data) => request(`/contexts/${contextId}/object-types`, { method: 'POST', body: JSON.stringify(data) });
+export const updateContextObjectType = (contextId, name, data) => request(`/contexts/${contextId}/object-types/${name}`, { method: 'PUT', body: JSON.stringify(data) });
+export const deleteContextObjectType = (contextId, name) => request(`/contexts/${contextId}/object-types/${name}`, { method: 'DELETE' });

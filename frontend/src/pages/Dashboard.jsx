@@ -67,7 +67,7 @@ function Dashboard({ navigate }) {
       {summary && (
         <div className="kpi-grid">
           <KPI label="Videos" value={summary.total_videos} sub={`${summary.completed_videos} concluidos`} color="#2563EB" />
-          <KPI label="Expositores" value={summary.total_fixtures} sub={`${summary.total_stores} lojas`} color="#E11D48" />
+          <KPI label="Deteccoes" value={summary.total_fixtures} sub={`${summary.total_stores} lojas`} color="#E11D48" />
           <KPI label="UFs" value={summary.total_ufs} color="#10B981" />
           <KPI label="Ocupacao Media" value={`${summary.avg_occupancy}%`} color="#F59E0B" />
           <KPI label="Anomalias" value={summary.active_anomalies} color={summary.active_anomalies > 0 ? '#EF4444' : '#10B981'} />
@@ -80,7 +80,7 @@ function Dashboard({ navigate }) {
       <div className="dashboard-grid">
         {/* By Fixture Type */}
         <div className="card">
-          <h3>Expositores por Tipo</h3>
+          <h3>Deteccoes por Tipo</h3>
           <div className="bar-chart">
             {byType.map(r => (
               <div key={r.fixture_type} className="bar-row">
@@ -100,7 +100,7 @@ function Dashboard({ navigate }) {
 
         {/* By UF */}
         <div className="card">
-          <h3>Expositores por UF</h3>
+          <h3>Deteccoes por UF</h3>
           <div className="bar-chart">
             {byUF.map(r => (
               <div key={r.uf} className="bar-row">
@@ -138,7 +138,7 @@ function Dashboard({ navigate }) {
 
         {/* Top Stores */}
         <div className="card">
-          <h3>Top Lojas por Expositores</h3>
+          <h3>Top Locais</h3>
           <table className="data-table">
             <thead>
               <tr><th>Loja</th><th>UF</th><th>Total</th><th>Ocupacao</th></tr>
@@ -161,7 +161,7 @@ function Dashboard({ navigate }) {
           <h3>Videos Recentes</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Arquivo</th><th>Loja</th><th>Status</th><th>Expositores</th></tr>
+              <tr><th>Arquivo</th><th>Loja</th><th>Status</th><th>Deteccoes</th></tr>
             </thead>
             <tbody>
               {recent.slice(0, 8).map(v => (

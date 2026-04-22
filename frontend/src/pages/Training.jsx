@@ -7,6 +7,7 @@ import {
   fetchTrainedModels, activateModel, deleteModel,
   fetchDetectionMode, setDetectionMode, fetchTrainingStats,
   fetchConfigFixtureTypes,
+  fetchContexts, fetchContextObjectTypes,
 } from '../api';
 import { TYPE_COLORS, updateTypeColors } from './Dashboard';
 import AnnotationEditor from './AnnotationEditor';
@@ -42,13 +43,30 @@ const JOB_STATUS_LABELS = {
 function Training() {
   const [tab, setTab] = useState('dataset');
   const [fixtureTypes, setFixtureTypes] = useState([]);
+  const [contexts, setContexts] = useState([]);
+  const [selectedContext, setSelectedContext] = useState('');
 
   useEffect(() => {
     fetchConfigFixtureTypes().then(types => {
       setFixtureTypes(types);
       updateTypeColors(types);
     }).catch(() => {});
+    fetchContexts().then(ctxs => setContexts(Array.isArray(ctxs) ? ctxs : [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (selectedContext) {
+      fetchContextObjectTypes(selectedContext).then(types => {
+        setFixtureTypes(Array.isArray(types) ? types : []);
+        updateTypeColors(Array.isArray(types) ? types : []);
+      }).catch(() => {});
+    } else {
+      fetchConfigFixtureTypes().then(types => {
+        setFixtureTypes(types);
+        updateTypeColors(types);
+      }).catch(() => {});
+    }
+  }, [selectedContext]);
 
   return (
     <div className="page">
@@ -68,7 +86,7 @@ function Training() {
         ))}
       </div>
 
-      {tab === 'dataset' && <DatasetTab fixtureTypes={fixtureTypes} />}
+      {tab === 'dataset' && <DatasetTab fixtureTypes={fixtureTypes} contexts={contexts} selectedContext={selectedContext} setSelectedContext={setSelectedContext} />}
       {tab === 'training' && <TrainingTab />}
       {tab === 'models' && <ModelsTab />}
     </div>
@@ -76,7 +94,7 @@ function Training() {
 }
 
 /* ========== DATASET TAB ========== */
-function DatasetTab({ fixtureTypes }) {
+function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContext }) {
   const [groups, setGroups] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -125,7 +143,7 @@ function DatasetTab({ fixtureTypes }) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setUploadProgress(`Processando ${file.name} (${i + 1}/${files.length})...`);
-        const result = await uploadTrainingImage(file);
+        const result = await uploadTrainingImage(file, selectedContext);
         if (result && result.frames_extracted) {
           messages.push(`${result.frames_extracted} frames de "${file.name}"`);
         } else {
@@ -284,6 +302,20 @@ function DatasetTab({ fixtureTypes }) {
           <span style={{ color: '#166534' }}>{uploadMessage}</span>
         </div>
       )}
+
+      {/* Context selector */}
+      <div className="card" style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <label style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap' }}>Contexto:</label>
+        <select className="filter-select" value={selectedContext} onChange={e => setSelectedContext(e.target.value)} style={{ minWidth: 200 }}>
+          <option value="">Todos (global)</option>
+          {contexts.map(ctx => (
+            <option key={ctx.context_id || ctx.id} value={ctx.context_id || ctx.id}>
+              {ctx.icon || ''} {ctx.display_name || ctx.name}
+            </option>
+          ))}
+        </select>
+        <span style={{ fontSize: 12, color: '#9CA3AF' }}>Filtrar dados de treinamento e tipos de objeto por contexto</span>
+      </div>
 
       {/* Upload zone */}
       <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}

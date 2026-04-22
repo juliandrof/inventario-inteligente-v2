@@ -44,7 +44,7 @@ function FixtureView({ pageParams }) {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Expositores ({total})</h1>
+        <h1>Deteccoes ({total})</h1>
         <div style={{ display: 'flex', gap: 12 }}>
           <select className="filter-select" value={selUF} onChange={e => { setSelUF(e.target.value); setSelStore(''); }}>
             <option value="">Todas UFs</option>
@@ -95,7 +95,7 @@ function FixtureView({ pageParams }) {
             ))}
           </tbody>
         </table>
-        {fixtures.length === 0 && <div className="empty-state">Nenhum expositor encontrado</div>}
+        {fixtures.length === 0 && <div className="empty-state">Nenhum objeto detectado</div>}
       </div>
 
       {/* Temporal Comparison Panel */}

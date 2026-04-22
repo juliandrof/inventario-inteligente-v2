@@ -15,7 +15,7 @@ const PAGE_KEYS = [
   { key: 'upload', label: 'Upload', icon: 'upload' },
   { key: 'videos', label: 'Videos', icon: 'list' },
   { key: 'photos', label: 'Fotos', icon: 'photo' },
-  { key: 'fixtures', label: 'Expositores', icon: 'fixture' },
+  { key: 'fixtures', label: 'Deteccoes', icon: 'fixture' },
   { key: 'review', label: 'Revisao IA', icon: 'review' },
   { key: 'training', label: 'Treinamento IA', icon: 'training' },
   { key: 'reports', label: 'Relatorios', icon: 'report' },
@@ -76,7 +76,7 @@ function App() {
           <div className="sidebar-logo">
             {customLogo ? <img src="/api/branding/logo" alt="Logo" className="custom-logo" /> : <AppLogo />}
           </div>
-          <div className="sidebar-subtitle">Inventario Inteligente de Expositores</div>
+          <div className="sidebar-subtitle">Inventario Inteligente</div>
         </div>
         <nav className="sidebar-nav">
           {PAGE_KEYS.map(page => (
