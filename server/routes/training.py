@@ -1292,10 +1292,33 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
                 raise ValueError(f"Failed to create UC model: {e.code} {body[:300]}")
 
         # Step 2: Copy model weights to a UC-accessible location
-        # Upload best.pt to a Volume subdir that UC can reference
         import io as _io
-        model_resp = w.files.download(model_path_vol)
-        model_bytes = model_resp.contents.read()
+
+        # Try to download model - handle old paths pointing to nonexistent volumes
+        model_bytes = None
+        paths_to_try = [model_path_vol]
+        # If path has old "trained_models" volume, also try "yolo_models"
+        if '/trained_models/' in model_path_vol:
+            paths_to_try.append(model_path_vol.replace('/trained_models/', '/yolo_models/'))
+        # Also try the job's results_path directly
+        if job.get("results_path"):
+            paths_to_try.append(f"{job['results_path']}/train/weights/best.pt")
+
+        download_error = None
+        for try_path in paths_to_try:
+            try:
+                resp_dl = w.files.download(try_path)
+                model_bytes = resp_dl.contents.read()
+                if model_bytes and len(model_bytes) > 100:
+                    logger.info(f"Downloaded model from: {try_path} ({len(model_bytes)} bytes)")
+                    break
+                model_bytes = None
+            except Exception as e:
+                download_error = f"{try_path}: {e}"
+                continue
+
+        if not model_bytes:
+            raise ValueError(f"Model weights not found. Tried: {', '.join(paths_to_try)}. Last error: {download_error}")
         uc_source_path = f"/Volumes/jsf_demo_catalog/scenic_crawler/yolo_models/uc_{uc_short_name}_{model_id}"
         w.files.upload(f"{uc_source_path}/best.pt", _io.BytesIO(model_bytes), overwrite=True)
         logger.info(f"Uploaded model to {uc_source_path}/best.pt ({len(model_bytes)} bytes)")
