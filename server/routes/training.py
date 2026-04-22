@@ -1293,6 +1293,7 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
             f.write(model_bytes)
 
         import mlflow
+        import mlflow.pyfunc
         mlflow.set_tracking_uri("databricks")
         mlflow.set_registry_uri("databricks-uc")
         mlflow.set_experiment("/Shared/inventario-inteligente/yolo-training")
@@ -1305,8 +1306,16 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
                     mlflow.log_metric(key, float(val))
             mlflow.log_params({"model_size": job.get("model_size", "?"), "epochs": job.get("epochs", "?")})
 
-            # Log model artifact (creates proper MLflow model format)
-            mlflow.log_artifact(local_model, artifact_path="model")
+            # Log as pyfunc model (creates MLmodel descriptor that UC requires)
+            class _YOLOWrapper(mlflow.pyfunc.PythonModel):
+                def predict(self, context, model_input):
+                    return []
+
+            mlflow.pyfunc.log_model(
+                artifact_path="model",
+                python_model=_YOLOWrapper(),
+                artifacts={"weights": local_model},
+            )
 
             # Register in UC
             model_uri = f"runs:/{run.info.run_id}/model"
