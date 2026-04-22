@@ -41,6 +41,59 @@ def _get_active_model_info() -> Optional[dict]:
     return None
 
 
+def _is_uc_model(model_name: str) -> bool:
+    """Check if model_name looks like a UC registered model (catalog.schema.name)."""
+    return model_name and "." in model_name and model_name.count(".") >= 2
+
+
+def _load_model_from_uc(uc_model_name: str) -> str:
+    """Download YOLO weights from UC model artifacts via MLflow.
+
+    Returns the local file path to the weights .pt file.
+    """
+    import mlflow
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_registry_uri("databricks-uc")
+    client = mlflow.MlflowClient()
+
+    # Find latest version
+    versions = client.search_model_versions(f"name='{uc_model_name}'")
+    if not versions:
+        raise FileNotFoundError(f"No versions found for UC model {uc_model_name}")
+
+    latest = max(versions, key=lambda v: int(v.version))
+    run_id = latest.run_id
+    logger.info(f"Loading UC model {uc_model_name} v{latest.version} (run {run_id})")
+
+    # Download the weights artifact
+    local_dir = "/tmp/uc_model_artifacts"
+    try:
+        local_path = client.download_artifacts(run_id, "model/artifacts/weights", local_dir)
+        if os.path.exists(local_path):
+            # Copy to standard path
+            import shutil
+            shutil.copy2(local_path, LOCAL_MODEL_PATH)
+            logger.info(f"UC model weights downloaded: {os.path.getsize(LOCAL_MODEL_PATH) / 1024 / 1024:.1f} MB")
+            return LOCAL_MODEL_PATH
+    except Exception as e:
+        logger.warning(f"Failed to download via artifact path: {e}")
+
+    # Fallback: try downloading full model and searching for .pt file
+    try:
+        model_dir = client.download_artifacts(run_id, "model", local_dir)
+        for root, _, files in os.walk(model_dir):
+            for f in files:
+                if f.endswith(".pt"):
+                    import shutil
+                    shutil.copy2(os.path.join(root, f), LOCAL_MODEL_PATH)
+                    logger.info(f"UC model weights found at {f}")
+                    return LOCAL_MODEL_PATH
+    except Exception as e:
+        logger.error(f"Failed to find weights in UC model artifacts: {e}")
+
+    raise FileNotFoundError(f"Could not find .pt weights in UC model {uc_model_name}")
+
+
 def _get_class_names(context_id: int = None) -> list[str]:
     """Get object type names sorted by name (same order as YOLO training export).
 
@@ -85,8 +138,8 @@ def _download_model(volume_path: str) -> str:
 def get_yolo_model():
     """Load or return cached YOLO model (singleton pattern).
 
-    Downloads the active model from UC Volume on first call, then caches it
-    in memory. Thread-safe.
+    Supports loading from UC registry (model_name like catalog.schema.name)
+    or from UC Volume (legacy model_path). Thread-safe.
 
     Returns:
         A YOLO model instance, or None if no active model is available.
@@ -99,23 +152,40 @@ def get_yolo_model():
             logger.warning("No active YOLO model found in trained_models table")
             return None
 
-        volume_path = model_info["model_path"]
+        model_name = model_info.get("model_name", "")
+        volume_path = model_info.get("model_path", "")
+        cache_key = model_name or volume_path
 
         # Re-download if the active model changed
-        if _model is not None and _model_path_cached == volume_path:
+        if _model is not None and _model_path_cached == cache_key:
             return _model
 
-        try:
-            local_path = _download_model(volume_path)
-        except Exception as e:
-            logger.error(f"Failed to download YOLO model from {volume_path}: {e}")
+        local_path = None
+
+        # Try UC registry first if model_name looks like a UC path
+        if _is_uc_model(model_name):
+            try:
+                local_path = _load_model_from_uc(model_name)
+            except Exception as e:
+                logger.warning(f"UC model load failed for {model_name}, trying Volume fallback: {e}")
+
+        # Fallback: download from Volume
+        if not local_path and volume_path and volume_path.startswith("/Volumes"):
+            try:
+                local_path = _download_model(volume_path)
+            except Exception as e:
+                logger.error(f"Failed to download YOLO model from {volume_path}: {e}")
+                return None
+
+        if not local_path:
+            logger.error("No model source available (neither UC nor Volume)")
             return None
 
         try:
             from ultralytics import YOLO
             _model = YOLO(local_path)
-            _model_path_cached = volume_path
-            logger.info(f"YOLO model loaded successfully: {model_info.get('model_name', volume_path)}")
+            _model_path_cached = cache_key
+            logger.info(f"YOLO model loaded successfully: {model_name or volume_path}")
             return _model
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")

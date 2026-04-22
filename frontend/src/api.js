@@ -87,19 +87,23 @@ export const uploadLogo = async (file) => {
 };
 
 // Training - Groups (video/image sources)
-export const fetchTrainingGroups = () => request('/training/groups');
+export const fetchTrainingGroups = (contextId) => request('/training/groups' + (contextId ? `?context_id=${contextId}` : ''));
 export const fetchGroupFrames = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/frames`);
+export const deleteTrainingGroup = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}`, { method: 'DELETE' });
 export const autoAnnotateGroup = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/auto-annotate-all`, { method: 'POST' });
 export const autoAnnotateGroupStatus = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/auto-annotate-status`);
 export const fetchGroupAnnotations = (sourceName) => request(`/training/groups/${encodeURIComponent(sourceName)}/all-annotations`);
 
 // Training - Images
 export const fetchTrainingImages = () => request('/training/images');
-export const uploadTrainingImage = async (file, contextId) => {
+export const uploadTrainingImage = async (file, contextId, frameInterval) => {
   const formData = new FormData();
   formData.append('file', file);
-  if (contextId) formData.append('context_id', contextId);
-  const res = await fetch(`${BASE_URL}/training/images/upload`, { method: 'POST', body: formData });
+  const params = [];
+  if (contextId) params.push(`context_id=${contextId}`);
+  if (frameInterval) params.push(`frame_interval=${frameInterval}`);
+  const qs = params.length ? '?' + params.join('&') : '';
+  const res = await fetch(`${BASE_URL}/training/images/upload${qs}`, { method: 'POST', body: formData });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 };
@@ -118,6 +122,11 @@ export const deleteModel = (id) => request(`/training/models/${id}`, { method: '
 export const fetchDetectionMode = () => request('/training/detection-mode');
 export const setDetectionMode = (mode) => request('/training/detection-mode', { method: 'PUT', body: JSON.stringify({ mode }) });
 export const fetchTrainingStats = () => request('/training/stats');
+
+// Training - UC Models
+export const fetchUCModels = () => request('/training/uc-models');
+export const activateUCModel = (modelName) => request(`/training/uc-models/${encodeURIComponent(modelName)}/activate`, { method: 'POST' });
+export const deleteUCModel = (modelName) => request(`/training/uc-models/${encodeURIComponent(modelName)}`, { method: 'DELETE' });
 
 // Contexts
 export const fetchContexts = () => request('/contexts');

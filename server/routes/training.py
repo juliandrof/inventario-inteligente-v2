@@ -45,6 +45,7 @@ class StartJobPayload(BaseModel):
     batch_size: int = 16
     cluster_spec: Optional[dict] = None
     context_id: Optional[int] = None
+    model_name: Optional[str] = None
 
 
 class DetectionModePayload(BaseModel):
@@ -126,6 +127,7 @@ def create_training_tables(conn):
     for alter_sql in [
         "ALTER TABLE training_images ADD COLUMN IF NOT EXISTS source_group VARCHAR(500)",
         "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS results_path VARCHAR(1000)",
+        "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS model_name VARCHAR(200)",
     ]:
         try:
             cur.execute(alter_sql)
@@ -227,14 +229,17 @@ async def training_debug():
 
 
 @router.post("/images/upload")
-async def upload_training_image(file: UploadFile = File(...), context_id: int = Query(None)):
-    """Upload a training image (or video, extracting 1 frame/sec) to Volume."""
+async def upload_training_image(file: UploadFile = File(...), context_id: int = Query(None), frame_interval: int = Query(2)):
+    """Upload a training image (or video, extracting frames) to Volume.
+
+    frame_interval: seconds between extracted frames (default 2).
+    """
     import io
     import traceback
     from PIL import Image as PILImage
 
     try:
-        return await _do_upload(file, io, PILImage, context_id=context_id)
+        return await _do_upload(file, io, PILImage, context_id=context_id, frame_interval=frame_interval)
     except HTTPException:
         raise
     except Exception as e:
@@ -242,7 +247,7 @@ async def upload_training_image(file: UploadFile = File(...), context_id: int = 
         raise HTTPException(500, f"Upload failed: {type(e).__name__}: {e}")
 
 
-async def _do_upload(file, io, PILImage, context_id=None):
+async def _do_upload(file, io, PILImage, context_id=None, frame_interval=2):
     filename = file.filename or f"image_{int(time.time() * 1000)}.jpg"
 
     content = await file.read()
@@ -264,7 +269,7 @@ async def _do_upload(file, io, PILImage, context_id=None):
             container = av.open(tmp_video_path)
             stream = container.streams.video[0]
             fps = float(stream.average_rate or 30)
-            frame_interval = max(1, int(round(fps * 2)))  # 1 frame every 2 seconds
+            frame_interval_frames = max(1, int(round(fps * max(1, frame_interval))))  # frames between extractions
 
             w_client = get_workspace_client()
             name_base = os.path.splitext(filename)[0]
@@ -281,7 +286,7 @@ async def _do_upload(file, io, PILImage, context_id=None):
             created_records = []
             seconds = 0
             for frame_idx, frame in enumerate(container.decode(video=0)):
-                if frame_idx % frame_interval == 0:
+                if frame_idx % frame_interval_frames == 0:
                     img = frame.to_image()  # PIL Image
                     w_frame, h_frame = img.size
 
@@ -289,7 +294,7 @@ async def _do_upload(file, io, PILImage, context_id=None):
                     img.save(buf, "JPEG", quality=75)
                     jpeg_bytes = buf.getvalue()
 
-                    frame_filename = f"{name_base}_frame_{seconds * 2}s.jpg"
+                    frame_filename = f"{name_base}_frame_{seconds * frame_interval}s.jpg"
                     frame_volume_path = f"{TRAINING_IMAGES_VOLUME}/{frame_filename}"
 
                     w_client.files.upload(frame_volume_path, io.BytesIO(jpeg_bytes), overwrite=True)
@@ -454,6 +459,28 @@ async def get_group_annotations(source_name: str):
             "fixture_type": r["fixture_type"], "x": r["x"], "y": r["y"], "w": r["w"], "h": r["h"],
         })
     return by_second
+
+
+@router.delete("/groups/{source_name}")
+async def delete_training_group(source_name: str):
+    """Delete an entire training group (dataset) and all its images/annotations."""
+    images = execute_query(
+        "SELECT image_id, volume_path FROM training_images WHERE COALESCE(source_group, filename) = %(sg)s",
+        {"sg": source_name},
+    )
+    if not images:
+        raise HTTPException(404, "Group not found")
+
+    w = get_workspace_client()
+    for img in images:
+        try:
+            w.files.delete(img["volume_path"])
+        except Exception:
+            pass
+        execute_update("DELETE FROM training_annotations WHERE image_id = %(iid)s", {"iid": img["image_id"]})
+        execute_update("DELETE FROM training_images WHERE image_id = %(iid)s", {"iid": img["image_id"]})
+
+    return {"deleted": True, "count": len(images)}
 
 
 import threading
@@ -882,9 +909,10 @@ async def start_training_job(payload: StartJobPayload):
     # Save initial job record
     execute_update("""
         INSERT INTO training_jobs
-        (job_id, model_size, epochs, batch_size, status, started_at, context_id)
-        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW(), %(ctx)s)
-    """, {"jid": job_id, "ms": payload.model_size, "ep": payload.epochs, "bs": payload.batch_size, "ctx": payload.context_id})
+        (job_id, model_size, epochs, batch_size, status, started_at, context_id, model_name)
+        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW(), %(ctx)s, %(mn)s)
+    """, {"jid": job_id, "ms": payload.model_size, "ep": payload.epochs, "bs": payload.batch_size,
+          "ctx": payload.context_id, "mn": payload.model_name})
 
     try:
         # Step 1: Export dataset
@@ -1035,7 +1063,7 @@ def _sync_job_status(job_id: int, databricks_run_id: int) -> str:
 
     # Fetch job info for model naming
     job_rows = execute_query(
-        "SELECT model_size, epochs, batch_size, results_path FROM training_jobs WHERE job_id = %(jid)s",
+        "SELECT model_size, epochs, batch_size, results_path, model_name FROM training_jobs WHERE job_id = %(jid)s",
         {"jid": job_id},
     )
     job_info = job_rows[0] if job_rows else {}
@@ -1386,6 +1414,132 @@ async def delete_model(model_id: int):
 
     execute_update("DELETE FROM trained_models WHERE model_id = %(mid)s", {"mid": model_id})
     return {"deleted": True, "model_id": model_id}
+
+
+# ===========================================================================
+# Unity Catalog Models
+# ===========================================================================
+
+@router.get("/uc-models")
+async def list_uc_models():
+    """List YOLO models registered in Unity Catalog."""
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+        client = mlflow.MlflowClient()
+
+        prefix = f"{CATALOG}.{SCHEMA}."
+        registered = client.search_registered_models(filter_string=f"name LIKE '{prefix}%'")
+
+        models = []
+        for rm in registered:
+            try:
+                versions = client.search_model_versions(f"name='{rm.name}'")
+                latest_version = max(versions, key=lambda v: int(v.version)) if versions else None
+                models.append({
+                    "name": rm.name,
+                    "short_name": rm.name.replace(prefix, ""),
+                    "version": latest_version.version if latest_version else "0",
+                    "status": latest_version.status if latest_version else "UNKNOWN",
+                    "created_at": rm.creation_timestamp / 1000 if rm.creation_timestamp else None,
+                    "updated_at": rm.last_updated_timestamp / 1000 if rm.last_updated_timestamp else None,
+                    "description": rm.description or "",
+                })
+            except Exception as e:
+                logger.warning(f"Failed to list versions for {rm.name}: {e}")
+                models.append({
+                    "name": rm.name,
+                    "short_name": rm.name.replace(prefix, ""),
+                    "version": "?",
+                    "status": "UNKNOWN",
+                    "description": rm.description or "",
+                })
+
+        # Mark active model
+        active = execute_query(
+            "SELECT model_name FROM trained_models WHERE is_active = TRUE LIMIT 1"
+        )
+        active_name = active[0]["model_name"] if active else None
+        for m in models:
+            m["is_active"] = m["name"] == active_name or m["short_name"] == active_name
+
+        return models
+
+    except Exception as e:
+        logger.error(f"Failed to list UC models: {e}", exc_info=True)
+        # Fallback to local models
+        local = execute_query("""
+            SELECT tm.*, tj.model_size, tj.epochs, tj.batch_size
+            FROM trained_models tm
+            LEFT JOIN training_jobs tj ON tm.job_id = tj.job_id
+            ORDER BY tm.created_at DESC
+        """)
+        return [
+            {
+                "name": m.get("model_name", ""),
+                "short_name": m.get("model_name", ""),
+                "version": "local",
+                "status": "READY",
+                "is_active": m.get("is_active", False),
+                "map50": m.get("map50"),
+                "precision_val": m.get("precision_val"),
+                "recall_val": m.get("recall_val"),
+                "created_at": m["created_at"].timestamp() if m.get("created_at") else None,
+            }
+            for m in local
+        ]
+
+
+@router.post("/uc-models/{model_name}/activate")
+async def activate_uc_model(model_name: str):
+    """Set a UC model as the active detection model."""
+    full_name = model_name if "." in model_name else f"{CATALOG}.{SCHEMA}.{model_name}"
+
+    # Deactivate all
+    execute_update("UPDATE trained_models SET is_active = FALSE")
+
+    # Check if we have a local record
+    existing = execute_query(
+        "SELECT model_id FROM trained_models WHERE model_name IN (%(fn)s, %(sn)s)",
+        {"fn": full_name, "sn": model_name},
+    )
+    if existing:
+        execute_update(
+            "UPDATE trained_models SET is_active = TRUE, model_name = %(fn)s WHERE model_id = %(mid)s",
+            {"fn": full_name, "mid": existing[0]["model_id"]},
+        )
+    else:
+        model_id = int(time.time() * 1000)
+        execute_update("""
+            INSERT INTO trained_models (model_id, model_name, model_path, is_active, created_at)
+            VALUES (%(mid)s, %(mn)s, %(mn)s, TRUE, NOW())
+        """, {"mid": model_id, "mn": full_name})
+
+    return {"activated": True, "model_name": full_name}
+
+
+@router.delete("/uc-models/{model_name}")
+async def delete_uc_model(model_name: str):
+    """Delete a model from Unity Catalog and local tracking."""
+    full_name = model_name if "." in model_name else f"{CATALOG}.{SCHEMA}.{model_name}"
+
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+        client = mlflow.MlflowClient()
+        client.delete_registered_model(full_name)
+        logger.info(f"Deleted UC model: {full_name}")
+    except Exception as e:
+        logger.error(f"Failed to delete UC model {full_name}: {e}")
+        raise HTTPException(500, f"Falha ao excluir modelo do UC: {e}")
+
+    # Remove from local tracking
+    execute_update("DELETE FROM trained_models WHERE model_name IN (%(fn)s, %(sn)s)",
+                   {"fn": full_name, "sn": model_name})
+
+    return {"deleted": True, "model_name": full_name}
 
 
 # ===========================================================================

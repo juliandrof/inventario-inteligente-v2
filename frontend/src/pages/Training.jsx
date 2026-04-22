@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  fetchTrainingGroups, fetchGroupFrames, autoAnnotateGroup, autoAnnotateGroupStatus, fetchGroupAnnotations,
-  fetchTrainingImages, uploadTrainingImage, deleteTrainingImage,
+  fetchTrainingGroups, fetchGroupFrames, deleteTrainingGroup,
+  autoAnnotateGroup, autoAnnotateGroupStatus, fetchGroupAnnotations,
+  uploadTrainingImage, deleteTrainingImage,
   fetchImageAnnotations, saveAnnotations, autoAnnotate,
-  startTrainingJob, fetchTrainingJobs, fetchJobDetail, pollJobStatus, publishJobModel,
-  fetchTrainedModels, activateModel, deleteModel,
-  fetchDetectionMode, setDetectionMode, fetchTrainingStats,
+  startTrainingJob, fetchTrainingJobs, fetchJobDetail, publishJobModel,
+  fetchUCModels, activateUCModel, deleteUCModel,
+  fetchTrainingStats,
   fetchConfigFixtureTypes,
   fetchContexts, fetchContextObjectTypes,
 } from '../api';
@@ -13,38 +14,31 @@ import { TYPE_COLORS, updateTypeColors } from './Dashboard';
 import AnnotationEditor from './AnnotationEditor';
 
 const TABS = [
-  { key: 'dataset', label: 'Dataset' },
-  { key: 'training', label: 'Treinamentos' },
+  { key: 'datasets', label: 'Datasets' },
   { key: 'models', label: 'Modelos' },
 ];
 
 const MODEL_SIZES = [
-  { value: 'n', label: 'YOLOv8n', desc: 'Nano - Rapido', detail: 'Menor modelo, inferencia mais rapida. Ideal para dispositivos com recursos limitados.' },
-  { value: 's', label: 'YOLOv8s', desc: 'Small - Equilibrado', detail: 'Bom equilibrio entre velocidade e precisao. Recomendado para a maioria dos casos.' },
-  { value: 'm', label: 'YOLOv8m', desc: 'Medium - Preciso', detail: 'Maior precisao, requer mais recursos. Ideal quando a acuracia e prioridade.' },
+  { value: 'n', label: 'YOLOv8n', desc: 'Nano - Rapido', detail: 'Menor modelo, inferencia mais rapida.' },
+  { value: 's', label: 'YOLOv8s', desc: 'Small - Equilibrado', detail: 'Bom equilibrio entre velocidade e precisao.' },
+  { value: 'm', label: 'YOLOv8m', desc: 'Medium - Preciso', detail: 'Maior precisao, requer mais recursos.' },
 ];
 
 const JOB_STATUS_COLORS = {
-  PENDING: '#6B7280',
-  RUNNING: '#F59E0B',
-  COMPLETED: '#10B981',
-  FAILED: '#EF4444',
-  CANCELLED: '#9CA3AF',
+  PENDING: '#6B7280', RUNNING: '#F59E0B', COMPLETED: '#10B981', FAILED: '#EF4444', CANCELLED: '#9CA3AF',
+};
+const JOB_STATUS_LABELS = {
+  PENDING: 'Pendente', RUNNING: 'Em execucao', COMPLETED: 'Concluido', FAILED: 'Falhou', CANCELLED: 'Cancelado',
 };
 
-const JOB_STATUS_LABELS = {
-  PENDING: 'Pendente',
-  RUNNING: 'Em execucao',
-  COMPLETED: 'Concluido',
-  FAILED: 'Falhou',
-  CANCELLED: 'Cancelado',
-};
+const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'bmp', 'webp', 'tiff', 'tif'];
+function isPhoto(name) { return IMAGE_EXTS.includes(name.split('.').pop()?.toLowerCase()); }
 
 function Training() {
-  const [tab, setTab] = useState('dataset');
+  const [tab, setTab] = useState('datasets');
   const [fixtureTypes, setFixtureTypes] = useState([]);
   const [contexts, setContexts] = useState([]);
-  const [selectedContext, setSelectedContext] = useState('');
+  const [showWizard, setShowWizard] = useState(false);
 
   useEffect(() => {
     fetchConfigFixtureTypes().then(types => {
@@ -54,105 +48,122 @@ function Training() {
     fetchContexts().then(ctxs => setContexts(Array.isArray(ctxs) ? ctxs : [])).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (selectedContext) {
-      fetchContextObjectTypes(selectedContext).then(types => {
-        setFixtureTypes(Array.isArray(types) ? types : []);
-        updateTypeColors(Array.isArray(types) ? types : []);
-      }).catch(() => {});
-    } else {
-      fetchConfigFixtureTypes().then(types => {
-        setFixtureTypes(types);
-        updateTypeColors(types);
-      }).catch(() => {});
-    }
-  }, [selectedContext]);
+  const handleWizardClose = () => {
+    setShowWizard(false);
+  };
 
   return (
     <div className="page">
       <div className="page-header">
         <h1>Treinamento YOLO</h1>
+        {tab === 'datasets' && (
+          <button className="btn btn-primary" onClick={() => setShowWizard(true)}>
+            Novo Treinamento
+          </button>
+        )}
       </div>
 
       <div className="tab-bar">
         {TABS.map(t => (
-          <button
-            key={t.key}
-            className={`tab ${tab === t.key ? 'active' : ''}`}
-            onClick={() => setTab(t.key)}
-          >
+          <button key={t.key} className={`tab ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {tab === 'dataset' && <DatasetTab fixtureTypes={fixtureTypes} contexts={contexts} selectedContext={selectedContext} setSelectedContext={setSelectedContext} />}
-      {tab === 'training' && <TrainingTab />}
+      {tab === 'datasets' && <DatasetsTab fixtureTypes={fixtureTypes} contexts={contexts} />}
       {tab === 'models' && <ModelsTab />}
+
+      {showWizard && (
+        <TrainingWizard
+          contexts={contexts}
+          fixtureTypes={fixtureTypes}
+          setFixtureTypes={setFixtureTypes}
+          onClose={handleWizardClose}
+        />
+      )}
     </div>
   );
 }
 
-/* ========== DATASET TAB ========== */
-function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContext }) {
-  const [groups, setGroups] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const [error, setError] = useState(null);
-  const [uploadMessage, setUploadMessage] = useState(null);
-  const fileInputRef = useRef(null);
 
-  // Frame browser state
-  const [openGroup, setOpenGroup] = useState(null);
+/* ================================================================
+   TRAINING WIZARD (3 steps: Context → Upload → Annotate)
+   ================================================================ */
+function TrainingWizard({ contexts, fixtureTypes, setFixtureTypes, onClose }) {
+  const [step, setStep] = useState(1);
+  const [error, setError] = useState(null);
+
+  // Step 1: Context
+  const [selectedContext, setSelectedContext] = useState(null);
+
+  // Step 2: Upload
+  const [files, setFiles] = useState([]);
+  const [frameInterval, setFrameInterval] = useState(2);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const [uploadedGroups, setUploadedGroups] = useState([]);
+  const fileRef = useRef();
+  const [dragOver, setDragOver] = useState(false);
+
+  // Step 3: Annotate
   const [frames, setFrames] = useState([]);
   const [loadingFrames, setLoadingFrames] = useState(false);
-  const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
-  const [selectedFrames, setSelectedFrames] = useState(new Set());
-  const [selectMode, setSelectMode] = useState(false);
-  const [playingGroup, setPlayingGroup] = useState(null); // source_name of video being played
-
-  // Annotation editor state
   const [annotatingImage, setAnnotatingImage] = useState(null);
   const [annotatingData, setAnnotatingData] = useState(null);
+  const [selectedFrames, setSelectedFrames] = useState(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
+  const [annotateProgress, setAnnotateProgress] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
+  // Load context fixture types when context selected
+  useEffect(() => {
+    if (selectedContext) {
+      fetchContextObjectTypes(selectedContext).then(types => {
+        if (setFixtureTypes) {
+          setFixtureTypes(Array.isArray(types) ? types : []);
+          updateTypeColors(Array.isArray(types) ? types : []);
+        }
+      }).catch(() => {});
+    }
+  }, [selectedContext, setFixtureTypes]);
+
+  const goToStep2 = () => {
+    if (!selectedContext) { setError('Selecione um contexto'); return; }
     setError(null);
-    fetchTrainingGroups()
-      .then(grps => setGroups(Array.isArray(grps) ? grps : []))
-      .catch(err => { console.error('groups error:', err); setError(err.message); })
-      .finally(() => setLoading(false));
-    fetchTrainingStats()
-      .then(st => setStats(st))
-      .catch(err => console.error('stats error:', err));
-  }, []);
+    setStep(2);
+  };
 
-  useEffect(() => { load(); }, [load]);
+  const handleFiles = (fileList) => {
+    const arr = Array.from(fileList).map(f => ({
+      file: f, name: f.name, size: f.size,
+      mediaType: isPhoto(f.name) ? 'Foto' : 'Video',
+    }));
+    setFiles(prev => [...prev, ...arr]);
+  };
 
-  const [uploadProgress, setUploadProgress] = useState('');
+  const removeFile = (idx) => setFiles(f => f.filter((_, i) => i !== idx));
 
-  const handleUpload = async (files) => {
-    if (!files || files.length === 0) return;
+  const handleUpload = async () => {
+    if (files.length === 0) { setError('Adicione pelo menos um arquivo'); return; }
     setUploading(true);
     setError(null);
-    setUploadMessage(null);
+    const groups = [];
     try {
-      const messages = [];
       for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setUploadProgress(`Processando ${file.name} (${i + 1}/${files.length})...`);
-        const result = await uploadTrainingImage(file, selectedContext);
-        if (result && result.frames_extracted) {
-          messages.push(`${result.frames_extracted} frames de "${file.name}"`);
-        } else {
-          messages.push(`"${file.name}" adicionado`);
+        const f = files[i];
+        setUploadProgress(`Processando ${f.name} (${i + 1}/${files.length})...`);
+        const result = await uploadTrainingImage(f.file, selectedContext, frameInterval);
+        groups.push(f.name);
+        if (result?.frames_extracted) {
+          setUploadProgress(`${result.frames_extracted} frames extraidos de "${f.name}"`);
         }
       }
-      setUploadMessage(messages.join('. '));
-      setTimeout(() => setUploadMessage(null), 8000);
-      load();
+      setUploadedGroups(groups);
+      setStep(3);
+      // Load frames for the first uploaded group
+      loadAllFrames(groups);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -161,25 +172,26 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
     }
   };
 
-  const handleOpenGroup = async (sourceName) => {
-    if (openGroup === sourceName) { setOpenGroup(null); setFrames([]); return; }
-    setOpenGroup(sourceName);
+  const loadAllFrames = async (groups) => {
     setLoadingFrames(true);
     try {
-      const f = await fetchGroupFrames(sourceName);
-      setFrames(Array.isArray(f) ? f : []);
+      let allFrames = [];
+      for (const g of groups) {
+        const f = await fetchGroupFrames(g);
+        allFrames = allFrames.concat(Array.isArray(f) ? f : []);
+      }
+      setFrames(allFrames);
     } catch (err) { setError(err.message); }
     setLoadingFrames(false);
   };
 
-  const [annotateProgress, setAnnotateProgress] = useState(null); // {done, total, status}
-
-  const handleAutoAnnotateGroup = async (sourceName) => {
+  const handleAutoAnnotateAll = async () => {
+    if (uploadedGroups.length === 0) return;
+    const sourceName = uploadedGroups[0];
     setAutoAnnotatingGroup(sourceName);
     setAnnotateProgress(null);
     try {
       await autoAnnotateGroup(sourceName);
-      // Poll for progress
       const poll = setInterval(async () => {
         try {
           const status = await autoAnnotateGroupStatus(sourceName);
@@ -188,51 +200,16 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
             clearInterval(poll);
             setAutoAnnotatingGroup(null);
             setAnnotateProgress(null);
-            setUploadMessage(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
-            setTimeout(() => setUploadMessage(null), 6000);
-            load();
-            if (openGroup === sourceName) handleOpenGroup(sourceName);
+            setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
+            setTimeout(() => setSuccessMsg(null), 6000);
+            loadAllFrames(uploadedGroups);
           }
-        } catch (e) { /* keep polling */ }
+        } catch (_) { /* keep polling */ }
       }, 2000);
     } catch (err) {
       setError(err.message);
       setAutoAnnotatingGroup(null);
     }
-  };
-
-  const toggleFrame = (id) => {
-    setSelectedFrames(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    if (selectedFrames.size === frames.length) {
-      setSelectedFrames(new Set());
-    } else {
-      setSelectedFrames(new Set(frames.map(f => f.image_id)));
-    }
-  };
-
-  const deleteSelected = async () => {
-    if (selectedFrames.size === 0) return;
-    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s) selecionado(s)?`)) return;
-    try {
-      for (const id of selectedFrames) {
-        await deleteTrainingImage(id);
-      }
-      setSelectedFrames(new Set());
-      setSelectMode(false);
-      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
-      fetchTrainingStats().then(st => setStats(st)).catch(() => {});
-      if (openGroup) {
-        const f = await fetchGroupFrames(openGroup);
-        setFrames(Array.isArray(f) ? f : []);
-      }
-    } catch (err) { setError(err.message); }
   };
 
   const handleAnnotate = async (image) => {
@@ -246,27 +223,486 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
   const handleSaveAnnotations = async (annotations) => {
     try {
       await saveAnnotations(annotatingImage.image_id, annotations);
-      // Close editor first, then refresh in background without re-rendering editor
       setAnnotatingImage(null);
       setAnnotatingData(null);
-      // Lightweight refresh: just reload groups stats, not full re-render
-      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
-      fetchTrainingStats().then(st => setStats(st)).catch(() => {});
-      if (openGroup) {
-        fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
-      }
+      loadAllFrames(uploadedGroups);
     } catch (err) { setError(err.message); }
   };
 
   const handleAutoAnnotateFrame = async (image) => {
     try {
       await autoAnnotate(image.image_id);
-      // Only refresh the frames list, not the whole page
-      if (openGroup) {
-        fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
-      }
+      loadAllFrames(uploadedGroups);
+    } catch (err) { setError(err.message); }
+  };
+
+  const toggleFrame = (id) => {
+    setSelectedFrames(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const deleteSelected = async () => {
+    if (selectedFrames.size === 0) return;
+    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s)?`)) return;
+    try {
+      for (const id of selectedFrames) await deleteTrainingImage(id);
+      setSelectedFrames(new Set());
+      setSelectMode(false);
+      loadAllFrames(uploadedGroups);
+    } catch (err) { setError(err.message); }
+  };
+
+  const ftArray = fixtureTypes.map(ft => ({
+    name: ft.name,
+    display_name: ft.display_name || ft.name,
+    color: ft.color || TYPE_COLORS[ft.name] || '#888',
+  }));
+
+  const hasVideo = files.some(f => f.mediaType === 'Video');
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, overflow: 'auto' }}>
+      <div style={{ margin: '40px auto', maxWidth: 900, background: '#fff', borderRadius: 16, minHeight: '60vh', display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Novo Treinamento</h2>
+            <div style={{ display: 'flex', gap: 24, marginTop: 12 }}>
+              {[{ n: 1, l: 'Contexto' }, { n: 2, l: 'Upload' }, { n: 3, l: 'Anotacoes' }].map(s => (
+                <div key={s.n} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: step >= s.n ? 1 : 0.4 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: step === s.n ? 'var(--app-primary)' : step > s.n ? '#10B981' : '#D1D5DB',
+                    color: '#fff', fontSize: 13, fontWeight: 700,
+                  }}>{step > s.n ? '✓' : s.n}</div>
+                  <span style={{ fontSize: 13, fontWeight: step === s.n ? 600 : 400 }}>{s.l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: '#6B7280' }}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: 24, flex: 1, overflow: 'auto' }}>
+          {error && <div style={{ background: '#FEF2F2', padding: '10px 14px', borderRadius: 8, marginBottom: 16 }}><span className="error-text">{error}</span></div>}
+          {successMsg && <div style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '10px 14px', borderRadius: 8, marginBottom: 16 }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
+
+          {/* STEP 1: Context */}
+          {step === 1 && (
+            <>
+              <h3 style={{ margin: '0 0 8px' }}>Selecione o contexto de treinamento</h3>
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>O contexto define quais tipos de objeto serao usados nas anotacoes.</p>
+              {contexts.length === 0 ? (
+                <div className="empty-state">Nenhum contexto encontrado. Crie um em Configuracoes.</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
+                  {contexts.map(ctx => {
+                    const ctxId = ctx.context_id || ctx.id;
+                    const sel = String(selectedContext) === String(ctxId);
+                    return (
+                      <div key={ctxId} onClick={() => setSelectedContext(ctxId)} style={{
+                        padding: '20px 16px', borderRadius: 12, cursor: 'pointer', textAlign: 'center',
+                        border: sel ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                        background: sel ? '#FFF1F2' : '#fff', transition: 'all 0.15s',
+                      }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>{ctx.icon || '🎯'}</div>
+                        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{ctx.display_name || ctx.name}</div>
+                        {ctx.description && <div style={{ fontSize: 12, color: '#6B7280' }}>{ctx.description}</div>}
+                        {sel && <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* STEP 2: Upload */}
+          {step === 2 && (
+            <>
+              <h3 style={{ margin: '0 0 8px' }}>Upload do Dataset</h3>
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>Adicione videos ou fotos. Um arquivo por vez ou varios de uma vez.</p>
+
+              <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
+                onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onClick={() => fileRef.current?.click()}
+                style={{ marginBottom: 16 }}>
+                <div className="upload-icon">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 34v4a2 2 0 002 2h28a2 2 0 002-2v-4" stroke="var(--app-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <p>{uploading ? uploadProgress : 'Arraste arquivos aqui ou clique para selecionar'}</p>
+                <p className="upload-hint">Videos e imagens aceitos</p>
+                <input ref={fileRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
+                  onChange={e => { handleFiles(e.target.files); e.target.value = ''; }} />
+              </div>
+
+              {/* Frame interval selector for videos */}
+              {(hasVideo || files.length === 0) && (
+                <div style={{ background: '#F9FAFB', borderRadius: 10, padding: '14px 18px', marginBottom: 16 }}>
+                  <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 8 }}>
+                    Intervalo de frames (para videos): a cada {frameInterval} segundo{frameInterval > 1 ? 's' : ''}
+                  </label>
+                  <input type="range" min="1" max="10" step="1" value={frameInterval}
+                    onChange={e => setFrameInterval(Number(e.target.value))}
+                    style={{ width: '100%' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9CA3AF' }}>
+                    <span>1s (mais frames)</span><span>5s</span><span>10s (menos frames)</span>
+                  </div>
+                </div>
+              )}
+
+              {/* File list */}
+              {files.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {files.map((f, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: '#F9FAFB', borderRadius: 8 }}>
+                      <span style={{ fontSize: 20 }}>{f.mediaType === 'Video' ? '🎬' : '🖼️'}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{f.name}</div>
+                        <div style={{ fontSize: 12, color: '#6B7280' }}>{f.mediaType} | {(f.size / 1024 / 1024).toFixed(1)} MB</div>
+                      </div>
+                      <button className="btn btn-sm" onClick={() => removeFile(i)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* STEP 3: Annotate */}
+          {step === 3 && (
+            <>
+              <h3 style={{ margin: '0 0 8px' }}>Anotacoes do Dataset</h3>
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
+                Anote os frames manualmente ou use a IA para auto-anotar. Exclua frames desnecessarios.
+              </p>
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                <button className="btn btn-primary" onClick={handleAutoAnnotateAll}
+                  disabled={!!autoAnnotatingGroup}>
+                  {autoAnnotatingGroup
+                    ? (annotateProgress ? `Anotando ${annotateProgress.done}/${annotateProgress.total}...` : 'Iniciando...')
+                    : 'Auto-anotar todos com IA'}
+                </button>
+                <button className={`btn ${selectMode ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => { setSelectMode(!selectMode); setSelectedFrames(new Set()); }}>
+                  {selectMode ? 'Cancelar selecao' : 'Selecionar frames'}
+                </button>
+                {selectMode && (
+                  <>
+                    <button className="btn btn-sm" onClick={() => {
+                      setSelectedFrames(prev => prev.size === frames.length ? new Set() : new Set(frames.map(f => f.image_id)));
+                    }}>
+                      {selectedFrames.size === frames.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                    </button>
+                    <button className="btn btn-sm btn-danger" disabled={selectedFrames.size === 0} onClick={deleteSelected}>
+                      Excluir {selectedFrames.size} selecionado(s)
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {loadingFrames ? (
+                <div className="empty-state">Carregando frames...</div>
+              ) : frames.length === 0 ? (
+                <div className="empty-state">Nenhum frame encontrado.</div>
+              ) : (
+                <div className="training-frame-grid">
+                  {frames.map(fr => (
+                    <div key={fr.image_id}
+                      className={`training-frame-card ${selectMode && selectedFrames.has(fr.image_id) ? 'selected' : ''}`}
+                      onClick={selectMode ? () => toggleFrame(fr.image_id) : undefined}>
+                      <div style={{ position: 'relative' }}>
+                        <img src={fr.thumbnail_url} alt={fr.filename} className="training-frame-thumb" loading="lazy" />
+                        {selectMode && (
+                          <div className="training-frame-checkbox">
+                            <input type="checkbox" checked={selectedFrames.has(fr.image_id)} readOnly />
+                          </div>
+                        )}
+                      </div>
+                      <div className="training-frame-info">
+                        <span className="training-frame-name">{fr.filename.replace(/.*_frame_/, '').replace('.jpg', '')}</span>
+                        {(fr.actual_annotation_count || fr.annotation_count || 0) > 0 && (
+                          <span className="training-frame-ann-badge">{fr.actual_annotation_count || fr.annotation_count} ann.</span>
+                        )}
+                      </div>
+                      {!selectMode && (
+                        <div className="training-frame-actions">
+                          <button className="btn btn-sm btn-primary" onClick={() => handleAnnotate(fr)}>Anotar</button>
+                          <button className="btn btn-sm" onClick={() => handleAutoAnnotateFrame(fr)}>IA</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '16px 24px', borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            {step > 1 && step < 3 && (
+              <button className="btn btn-secondary" onClick={() => setStep(step - 1)}>Voltar</button>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+            {step === 1 && <button className="btn btn-primary" onClick={goToStep2}>Proximo</button>}
+            {step === 2 && (
+              <button className="btn btn-primary" onClick={handleUpload} disabled={uploading || files.length === 0}>
+                {uploading ? 'Enviando...' : 'Enviar e Anotar'}
+              </button>
+            )}
+            {step === 3 && <button className="btn btn-primary" onClick={onClose}>Concluir</button>}
+          </div>
+        </div>
+      </div>
+
+      {/* Annotation Editor modal */}
+      {annotatingImage && annotatingData !== null && (
+        <AnnotationEditor
+          imageId={annotatingImage.image_id}
+          imageSrc={annotatingImage.image_url}
+          initialAnnotations={annotatingData}
+          fixtureTypes={ftArray}
+          onSave={handleSaveAnnotations}
+          onClose={() => { setAnnotatingImage(null); setAnnotatingData(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+/* ================================================================
+   DATASETS TAB
+   ================================================================ */
+function DatasetsTab({ fixtureTypes, contexts }) {
+  const [groups, setGroups] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [successMsg, setSuccessMsg] = useState(null);
+
+  // Expand/annotate state
+  const [openGroup, setOpenGroup] = useState(null);
+  const [frames, setFrames] = useState([]);
+  const [loadingFrames, setLoadingFrames] = useState(false);
+  const [autoAnnotatingGroup, setAutoAnnotatingGroup] = useState(null);
+  const [annotateProgress, setAnnotateProgress] = useState(null);
+  const [selectedFrames, setSelectedFrames] = useState(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [playingGroup, setPlayingGroup] = useState(null);
+
+  // Annotation editor
+  const [annotatingImage, setAnnotatingImage] = useState(null);
+  const [annotatingData, setAnnotatingData] = useState(null);
+
+  // Training modal
+  const [trainGroup, setTrainGroup] = useState(null);
+  const [trainModelName, setTrainModelName] = useState('');
+  const [trainModelSize, setTrainModelSize] = useState('s');
+  const [trainEpochs, setTrainEpochs] = useState(100);
+  const [trainBatchSize, setTrainBatchSize] = useState(16);
+  const [startingTrain, setStartingTrain] = useState(false);
+
+  // Training jobs
+  const [jobs, setJobs] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [expandedJobId, setExpandedJobId] = useState(null);
+  const [jobDetails, setJobDetails] = useState({});
+  const [publishing, setPublishing] = useState(null);
+  const [publishModal, setPublishModal] = useState(null);
+  const [publishName, setPublishName] = useState('');
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetchTrainingGroups()
+      .then(grps => setGroups(Array.isArray(grps) ? grps : []))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+    fetchTrainingStats().then(st => setStats(st)).catch(() => {});
+    fetchTrainingJobs()
+      .then(resp => setJobs(resp.jobs || resp || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Poll for active jobs
+  useEffect(() => {
+    const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
+    if (!hasActive) return;
+    const interval = setInterval(() => {
+      fetchTrainingJobs().then(resp => setJobs(resp.jobs || resp || [])).catch(() => {});
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [jobs]);
+
+  const handleOpenGroup = async (sourceName) => {
+    if (openGroup === sourceName) { setOpenGroup(null); setFrames([]); return; }
+    setOpenGroup(sourceName);
+    setLoadingFrames(true);
+    try {
+      const f = await fetchGroupFrames(sourceName);
+      setFrames(Array.isArray(f) ? f : []);
+    } catch (err) { setError(err.message); }
+    setLoadingFrames(false);
+  };
+
+  const handleDeleteGroup = async (sourceName) => {
+    if (!window.confirm(`Excluir dataset "${sourceName}" e todos os frames?`)) return;
+    try {
+      await deleteTrainingGroup(sourceName);
+      load();
+      if (openGroup === sourceName) { setOpenGroup(null); setFrames([]); }
+    } catch (err) { setError(err.message); }
+  };
+
+  const handleAutoAnnotateGroup = async (sourceName) => {
+    setAutoAnnotatingGroup(sourceName);
+    setAnnotateProgress(null);
+    try {
+      await autoAnnotateGroup(sourceName);
+      const poll = setInterval(async () => {
+        try {
+          const status = await autoAnnotateGroupStatus(sourceName);
+          setAnnotateProgress(status);
+          if (status.status === 'COMPLETED') {
+            clearInterval(poll);
+            setAutoAnnotatingGroup(null);
+            setAnnotateProgress(null);
+            setSuccessMsg(`Auto-anotacao concluida: ${status.done - status.errors}/${status.total} frames anotados`);
+            setTimeout(() => setSuccessMsg(null), 6000);
+            load();
+            if (openGroup === sourceName) handleOpenGroup(sourceName);
+          }
+        } catch (_) { /* keep polling */ }
+      }, 2000);
+    } catch (err) {
+      setError(err.message);
+      setAutoAnnotatingGroup(null);
+    }
+  };
+
+  const handleAnnotate = async (image) => {
+    try {
+      const anns = await fetchImageAnnotations(image.image_id);
+      setAnnotatingData(Array.isArray(anns) ? anns : anns.annotations || []);
+      setAnnotatingImage(image);
+    } catch (err) { setError(err.message); }
+  };
+
+  const handleSaveAnnotations = async (annotations) => {
+    try {
+      await saveAnnotations(annotatingImage.image_id, annotations);
+      setAnnotatingImage(null);
+      setAnnotatingData(null);
+      fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
+      if (openGroup) fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
+    } catch (err) { setError(err.message); }
+  };
+
+  const handleAutoAnnotateFrame = async (image) => {
+    try {
+      await autoAnnotate(image.image_id);
+      if (openGroup) fetchGroupFrames(openGroup).then(f => setFrames(Array.isArray(f) ? f : [])).catch(() => {});
       fetchTrainingGroups().then(grps => setGroups(Array.isArray(grps) ? grps : [])).catch(() => {});
     } catch (err) { setError(err.message); }
+  };
+
+  const deleteSelected = async () => {
+    if (selectedFrames.size === 0) return;
+    if (!window.confirm(`Excluir ${selectedFrames.size} frame(s)?`)) return;
+    try {
+      for (const id of selectedFrames) await deleteTrainingImage(id);
+      setSelectedFrames(new Set());
+      setSelectMode(false);
+      load();
+      if (openGroup) {
+        const f = await fetchGroupFrames(openGroup);
+        setFrames(Array.isArray(f) ? f : []);
+      }
+    } catch (err) { setError(err.message); }
+  };
+
+  // Training modal handlers
+  const openTrainModal = () => {
+    setTrainModelName(`yolo_${trainModelSize}_e${trainEpochs}`);
+    setTrainGroup(true);
+  };
+
+  const handleStartTraining = async () => {
+    setStartingTrain(true);
+    setError(null);
+    try {
+      await startTrainingJob({
+        model_size: trainModelSize,
+        epochs: trainEpochs,
+        batch_size: trainBatchSize,
+        model_name: trainModelName,
+      });
+      setTrainGroup(null);
+      setSuccessMsg('Treinamento iniciado! Acompanhe abaixo.');
+      setTimeout(() => setSuccessMsg(null), 6000);
+      fetchTrainingJobs().then(resp => setJobs(resp.jobs || resp || [])).catch(() => {});
+    } catch (err) { setError(err.message); }
+    setStartingTrain(false);
+  };
+
+  // Job expand
+  const handleExpandJob = async (jobId) => {
+    if (expandedJobId === jobId) { setExpandedJobId(null); return; }
+    setExpandedJobId(jobId);
+    if (!jobDetails[jobId]) {
+      try {
+        const detail = await fetchJobDetail(jobId);
+        setJobDetails(prev => ({ ...prev, [jobId]: detail }));
+      } catch (err) { setError(err.message); }
+    }
+  };
+
+  const openPublishModal = (job) => {
+    const suggested = job.model_name || `yolo_${job.model_size || 'n'}_e${job.epochs || 50}`;
+    setPublishName(suggested);
+    setPublishModal({ jobId: job.job_id });
+  };
+
+  const handlePublish = async () => {
+    if (!publishModal) return;
+    try {
+      setPublishing(publishModal.jobId);
+      setError(null);
+      setPublishModal(null);
+      const result = await publishJobModel(publishModal.jobId, publishName);
+      fetchTrainingJobs().then(resp => setJobs(resp.jobs || resp || [])).catch(() => {});
+      const ucInfo = result.uc_model ? ` | UC: ${result.uc_model} v${result.uc_version || '?'}` : '';
+      const ucErr = result.uc_error ? ` | Erro UC: ${result.uc_error}` : '';
+      setSuccessMsg(`Modelo publicado!${ucInfo}${ucErr}`);
+      setTimeout(() => setSuccessMsg(null), 10000);
+    } catch (err) { setError(`Falha ao publicar: ${err.message}`); }
+    setPublishing(null);
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds) return '-';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.round(seconds % 60);
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
   };
 
   const ftArray = fixtureTypes.map(ft => ({
@@ -277,6 +713,9 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
 
   return (
     <>
+      {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
+      {successMsg && <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
+
       {/* Stats bar */}
       {stats && (
         <div className="training-stats-bar">
@@ -288,87 +727,102 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
             <span className="training-stat-value">{stats.total_annotations || 0}</span>
             <span className="training-stat-label">Anotacoes</span>
           </div>
-          {Object.entries(stats.annotations_by_type || stats.annotations_per_type || {}).map(([type, count]) => (
-            <span key={type} className="fixture-type-badge" style={{ background: TYPE_COLORS[type] || '#888' }}>
-              {type}: {count}
-            </span>
+          {Object.entries(stats.annotations_by_type || {}).map(([type, count]) => (
+            <span key={type} className="fixture-type-badge" style={{ background: TYPE_COLORS[type] || '#888' }}>{type}: {count}</span>
           ))}
         </div>
       )}
 
-      {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
-      {uploadMessage && (
-        <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}>
-          <span style={{ color: '#166534' }}>{uploadMessage}</span>
+      {/* Publish Modal */}
+      {publishModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 480, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ margin: '0 0 8px' }}>Publicar Modelo no Unity Catalog</h3>
+            <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>
+              O modelo sera registrado em <strong>jsf_demo_catalog.scenic_crawler</strong>.
+            </p>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo no UC</label>
+            <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 4 }}
+              value={publishName}
+              onChange={e => setPublishName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))} />
+            <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 20 }}>
+              Nome completo: <code>jsf_demo_catalog.scenic_crawler.{publishName || '...'}</code>
+            </div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setPublishModal(null)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handlePublish} disabled={!publishName}>Publicar no UC</button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Context selector - card grid matching Upload page */}
-      <div className="card">
-        <h3>Selecione o contexto de treinamento</h3>
-        <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
-          O contexto define quais tipos de objeto serao usados nas anotacoes e no treinamento.
-        </p>
-        {contexts.length === 0 ? (
-          <div className="empty-state">Nenhum contexto encontrado. Crie um em Configuracoes.</div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-            {contexts.map(ctx => {
-              const ctxId = ctx.context_id || ctx.id;
-              const isSelected = String(selectedContext) === String(ctxId);
-              return (
-                <div
-                  key={ctxId}
-                  onClick={() => setSelectedContext(isSelected ? '' : ctxId)}
+      {/* Training config modal */}
+      {trainGroup && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 560, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ margin: '0 0 20px' }}>Iniciar Treinamento</h3>
+
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo</label>
+            <input className="inline-input" style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 16 }}
+              value={trainModelName}
+              onChange={e => setTrainModelName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+              placeholder="ex: yolo_expositores_v1" />
+
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 8 }}>Tamanho do modelo</label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
+              {MODEL_SIZES.map(ms => (
+                <div key={ms.value} onClick={() => { setTrainModelSize(ms.value); setTrainModelName(`yolo_${ms.value}_e${trainEpochs}`); }}
                   style={{
-                    padding: '20px 16px', borderRadius: 12, cursor: 'pointer', textAlign: 'center',
-                    border: isSelected ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
-                    background: isSelected ? '#FFF1F2' : '#fff',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>{ctx.icon || '🎯'}</div>
-                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{ctx.display_name || ctx.name}</div>
-                  {ctx.description && <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.4 }}>{ctx.description}</div>}
-                  {isSelected && (
-                    <span className="status-badge" style={{ background: 'var(--app-primary)', marginTop: 8, display: 'inline-block' }}>SELECIONADO</span>
-                  )}
+                    padding: '12px 10px', borderRadius: 10, cursor: 'pointer', textAlign: 'center',
+                    border: trainModelSize === ms.value ? '2px solid var(--app-primary)' : '1px solid #E5E7EB',
+                    background: trainModelSize === ms.value ? '#FFF1F2' : '#fff',
+                  }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{ms.label}</div>
+                  <div style={{ fontSize: 12, color: '#6B7280' }}>{ms.desc}</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
 
-      {/* Upload zone */}
-      <div className="card">
-        <div className={`upload-zone ${dragOver ? 'drag-over' : ''}`}
-          onDrop={e => { e.preventDefault(); setDragOver(false); handleUpload(e.dataTransfer.files); }}
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onClick={() => fileInputRef.current?.click()}>
-          <div className="upload-icon">
-            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-              <path d="M24 8v24M24 8l-8 8M24 8l8 8M8 34v4a2 2 0 002 2h28a2 2 0 002-2v-4" stroke="var(--app-primary)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Epochs: {trainEpochs}</label>
+            <input type="range" min="30" max="300" step="10" value={trainEpochs}
+              onChange={e => { setTrainEpochs(Number(e.target.value)); setTrainModelName(`yolo_${trainModelSize}_e${e.target.value}`); }}
+              style={{ width: '100%', marginBottom: 16 }} />
+
+            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 8 }}>Batch Size</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {[8, 16, 32].map(bs => (
+                <button key={bs} className={`btn ${trainBatchSize === bs ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTrainBatchSize(bs)}>{bs}</button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setTrainGroup(null)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handleStartTraining} disabled={startingTrain || !trainModelName}>
+                {startingTrain ? 'Iniciando...' : 'Iniciar Treinamento'}
+              </button>
+            </div>
           </div>
-          <p>{uploading ? (uploadProgress || 'Extraindo frames...') : 'Arraste arquivos aqui ou clique para selecionar'}</p>
-          <p className="upload-hint">Videos: frames extraidos a 1/segundo | Imagens: adicionadas diretamente</p>
-          <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }}
-            onChange={e => handleUpload(e.target.files)} />
         </div>
+      )}
+
+      {/* Dataset groups */}
+      <div className="card" style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ margin: 0 }}>Datasets</h3>
+        <button className="btn btn-primary btn-sm" onClick={openTrainModal}
+          disabled={!groups.length || !groups.some(g => g.total_annotations > 0)}>
+          Treinar Modelo
+        </button>
       </div>
 
-      {/* Source groups */}
       {loading ? (
         <div className="empty-state">Carregando...</div>
       ) : groups.length === 0 ? (
-        <div className="empty-state">Nenhum dado de treinamento. Faca upload para comecar.</div>
+        <div className="empty-state">Nenhum dataset. Clique em "Novo Treinamento" para comecar.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {groups.map(g => (
             <div key={g.source_name} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              {/* Group header */}
               <div className="training-group-header" onClick={() => handleOpenGroup(g.source_name)}>
                 <img src={g.thumbnail_url} alt="" className="training-group-thumb" />
                 <div className="training-group-info">
@@ -389,22 +843,19 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
                   <button className="btn btn-sm" disabled={autoAnnotatingGroup === g.source_name}
                     onClick={() => handleAutoAnnotateGroup(g.source_name)}>
                     {autoAnnotatingGroup === g.source_name
-                      ? (annotateProgress ? `Anotando ${annotateProgress.done}/${annotateProgress.total}...` : 'Iniciando...')
-                      : 'Auto-anotar com IA'}
+                      ? (annotateProgress ? `${annotateProgress.done}/${annotateProgress.total}` : 'Iniciando...')
+                      : 'Auto-anotar IA'}
                   </button>
+                  <button className="btn btn-sm btn-danger" onClick={() => handleDeleteGroup(g.source_name)}>Excluir</button>
                 </div>
               </div>
 
-              {/* Video player with annotation overlay */}
+              {/* Video player */}
               {playingGroup === g.source_name && g.video_url && (
-                <VideoAnnotationPlayer
-                  videoUrl={g.video_url}
-                  sourceName={g.source_name}
-                  fixtureTypes={ftArray}
-                />
+                <VideoAnnotationPlayer videoUrl={g.video_url} sourceName={g.source_name} fixtureTypes={ftArray} />
               )}
 
-              {/* Frame browser (expanded) */}
+              {/* Frame browser */}
               {openGroup === g.source_name && (
                 <div className="training-frames-panel">
                   {loadingFrames ? (
@@ -418,14 +869,14 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
                         </button>
                         {selectMode && (
                           <>
-                            <button className="btn btn-sm" onClick={selectAll}>
+                            <button className="btn btn-sm" onClick={() => {
+                              setSelectedFrames(prev => prev.size === frames.length ? new Set() : new Set(frames.map(f => f.image_id)));
+                            }}>
                               {selectedFrames.size === frames.length ? 'Desmarcar todos' : 'Selecionar todos'}
                             </button>
-                            <button className="btn btn-sm btn-danger" disabled={selectedFrames.size === 0}
-                              onClick={deleteSelected}>
-                              Excluir {selectedFrames.size} selecionado(s)
+                            <button className="btn btn-sm btn-danger" disabled={selectedFrames.size === 0} onClick={deleteSelected}>
+                              Excluir {selectedFrames.size}
                             </button>
-                            <span style={{ fontSize: 12, color: '#888' }}>{selectedFrames.size} de {frames.length}</span>
                           </>
                         )}
                       </div>
@@ -433,7 +884,13 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
                         {frames.map(fr => (
                           <div key={fr.image_id}
                             className={`training-frame-card ${selectMode && selectedFrames.has(fr.image_id) ? 'selected' : ''}`}
-                            onClick={selectMode ? () => toggleFrame(fr.image_id) : undefined}>
+                            onClick={selectMode ? () => {
+                              setSelectedFrames(prev => {
+                                const next = new Set(prev);
+                                if (next.has(fr.image_id)) next.delete(fr.image_id); else next.add(fr.image_id);
+                                return next;
+                              });
+                            } : undefined}>
                             <div style={{ position: 'relative' }}>
                               <img src={fr.thumbnail_url} alt={fr.filename} className="training-frame-thumb" loading="lazy" />
                               {selectMode && (
@@ -466,7 +923,87 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
         </div>
       )}
 
-      {/* Annotation Editor modal */}
+      {/* Training Jobs */}
+      {jobs.length > 0 && (
+        <div style={{ marginTop: 24 }}>
+          <h3>Treinamentos</h3>
+          <div className="training-jobs-list">
+            {jobs.map(job => {
+              const detail = jobDetails[job.job_id];
+              const isExpanded = expandedJobId === job.job_id;
+              return (
+                <div key={job.job_id} className="card training-job-card">
+                  <div className="training-job-header" onClick={() => handleExpandJob(job.job_id)}>
+                    <div className="training-job-header-left">
+                      <span className="status-badge" style={{ background: JOB_STATUS_COLORS[job.status] || '#666' }}>
+                        {JOB_STATUS_LABELS[job.status] || job.status}
+                      </span>
+                      {job.model_name && <span style={{ fontSize: 13, fontWeight: 600 }}>{job.model_name}</span>}
+                      <span className="training-job-model">{job.model_size || '-'}</span>
+                      <span className="training-job-params">{job.epochs}ep / batch{job.batch_size}</span>
+                    </div>
+                    <div className="training-job-header-right">
+                      <span className="training-job-duration">{formatDuration(job.duration_seconds)}</span>
+                      <span className="training-job-expand">{isExpanded ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="training-job-details">
+                      <div style={{ padding: '8px 12px', fontSize: 13, color: '#6B7280', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                        {job.started_at && <span>Inicio: {new Date(job.started_at).toLocaleString('pt-BR')}</span>}
+                        {job.completed_at && <span>Fim: {new Date(job.completed_at).toLocaleString('pt-BR')}</span>}
+                        {job.databricks_run_id && <span>Run: {job.databricks_run_id}</span>}
+                      </div>
+
+                      {job.status === 'COMPLETED' && (() => {
+                        const pm = (() => { try { if (job.metrics_json) return JSON.parse(job.metrics_json); } catch (_) {} try { if (detail?.metrics_json) return JSON.parse(detail.metrics_json); } catch (_) {} return detail || {}; })();
+                        return (
+                          <>
+                            <div className="training-metrics-grid">
+                              <MetricCard label="mAP@50" value={pm.map50} />
+                              <MetricCard label="mAP@50-95" value={pm.map50_95} />
+                              <MetricCard label="Precision" value={pm.precision} />
+                              <MetricCard label="Recall" value={pm.recall} />
+                            </div>
+                            <div style={{ marginTop: 16, padding: '0 12px 12px' }}>
+                              <button className="btn btn-primary" onClick={() => openPublishModal(job)} disabled={publishing === job.job_id}>
+                                {publishing === job.job_id ? 'Publicando...' : 'Publicar no UC'}
+                              </button>
+                            </div>
+                          </>
+                        );
+                      })()}
+
+                      {job.status === 'RUNNING' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12 }}>
+                          <div className="training-progress-bar-track">
+                            <div className="training-progress-bar-fill training-progress-bar-indeterminate"
+                              style={{ width: '30%', animation: 'training-progress-slide 1.5s ease-in-out infinite' }} />
+                          </div>
+                          <span className="training-progress-label">Treinando...</span>
+                          <style>{`@keyframes training-progress-slide { 0% { margin-left: 0%; } 50% { margin-left: 70%; } 100% { margin-left: 0%; } }`}</style>
+                        </div>
+                      )}
+
+                      {job.status === 'PENDING' && <div style={{ padding: 12, color: '#6B7280' }}>Aguardando cluster...</div>}
+
+                      {job.status === 'FAILED' && (
+                        <div style={{ padding: 12, background: '#FEF2F2', borderRadius: 8, margin: '8px 12px' }}>
+                          <div style={{ fontWeight: 600, color: '#991B1B', marginBottom: 4 }}>Falha</div>
+                          <div className="error-text" style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{job.error_message || 'Erro desconhecido'}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Annotation Editor */}
       {annotatingImage && annotatingData !== null && (
         <AnnotationEditor
           imageId={annotatingImage.image_id}
@@ -481,7 +1018,10 @@ function DatasetTab({ fixtureTypes, contexts, selectedContext, setSelectedContex
   );
 }
 
-/* ========== VIDEO ANNOTATION PLAYER ========== */
+
+/* ================================================================
+   VIDEO ANNOTATION PLAYER
+   ================================================================ */
 function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -494,20 +1034,13 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   const [duration, setDuration] = useState(0);
 
   useEffect(() => {
-    fetchGroupAnnotations(sourceName).then(data => {
-      setAnnotations(data || {});
-      setLoaded(true);
-    }).catch(() => setLoaded(true));
+    fetchGroupAnnotations(sourceName).then(data => { setAnnotations(data || {}); setLoaded(true); }).catch(() => setLoaded(true));
   }, [sourceName]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const onTime = () => {
-      const sec = Math.floor(video.currentTime);
-      setCurrentAnns(annotations[sec] || []);
-      setCurrentTime(video.currentTime);
-    };
+    const onTime = () => { const sec = Math.floor(video.currentTime); setCurrentAnns(annotations[sec] || []); setCurrentTime(video.currentTime); };
     const onMeta = () => setDuration(video.duration || 0);
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
@@ -515,12 +1048,7 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     video.addEventListener('loadedmetadata', onMeta);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
-    return () => {
-      video.removeEventListener('timeupdate', onTime);
-      video.removeEventListener('loadedmetadata', onMeta);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
-    };
+    return () => { video.removeEventListener('timeupdate', onTime); video.removeEventListener('loadedmetadata', onMeta); video.removeEventListener('play', onPlay); video.removeEventListener('pause', onPause); };
   }, [annotations]);
 
   useEffect(() => {
@@ -529,33 +1057,10 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      containerRef.current?.requestFullscreen();
-    }
-  };
-
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.paused ? v.play() : v.pause();
-  };
-
-  const seek = (e) => {
-    const v = videoRef.current;
-    if (!v || !duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pct = (e.clientX - rect.left) / rect.width;
-    v.currentTime = pct * duration;
-  };
-
-  const fmtTime = (s) => {
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  };
+  const toggleFullscreen = () => { document.fullscreenElement ? document.exitFullscreen() : containerRef.current?.requestFullscreen(); };
+  const togglePlay = () => { const v = videoRef.current; if (v) v.paused ? v.play() : v.pause(); };
+  const seek = (e) => { const v = videoRef.current; if (!v || !duration) return; const rect = e.currentTarget.getBoundingClientRect(); v.currentTime = ((e.clientX - rect.left) / rect.width) * duration; };
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
   const typeColorMap = {};
   (fixtureTypes || []).forEach(ft => { typeColorMap[ft.name] = ft.color || '#E11D48'; });
@@ -563,7 +1068,6 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
   return (
     <div className="video-annotation-player">
       <div className={`video-ann-container ${isFullscreen ? 'fullscreen' : ''}`} ref={containerRef}>
-        {/* Video + overlay wrapper: overlay is sized by the video element */}
         <div className="video-ann-viewport" onClick={togglePlay}>
           <div className="video-ann-video-wrap">
             <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
@@ -574,18 +1078,13 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
                   width: `${ann.w}%`, height: `${ann.h}%`,
                   borderColor: typeColorMap[ann.fixture_type] || '#10B981',
                 }}>
-                  <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>
-                    {ann.fixture_type}
-                  </span>
+                  <span className="video-ann-label" style={{ background: typeColorMap[ann.fixture_type] || '#10B981' }}>{ann.fixture_type}</span>
                 </div>
               ))}
             </div>
-            {!playing && <div className="video-ann-play-overlay">
-              <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
-            </div>}
+            {!playing && <div className="video-ann-play-overlay"><svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg></div>}
           </div>
         </div>
-        {/* Custom controls bar */}
         <div className="video-ann-controls">
           <button className="video-ann-ctrl-btn" onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
           <div className="video-ann-seekbar" onClick={seek}>
@@ -602,112 +1101,42 @@ function VideoAnnotationPlayer({ videoUrl, sourceName, fixtureTypes }) {
 }
 
 
-/* ========== TRAINING TAB ========== */
-function TrainingTab() {
-  const [jobs, setJobs] = useState([]);
+/* ================================================================
+   MODELS TAB (from Unity Catalog)
+   ================================================================ */
+function ModelsTab() {
+  const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showConfig, setShowConfig] = useState(false);
-  const [modelSize, setModelSize] = useState('s');
-  const [epochs, setEpochs] = useState(100);
-  const [batchSize, setBatchSize] = useState(16);
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
-  const [expandedJobId, setExpandedJobId] = useState(null);
-  const [jobDetails, setJobDetails] = useState({});
-  const [tooltipKey, setTooltipKey] = useState(null);
 
-  const loadJobs = useCallback((showLoading) => {
-    if (showLoading) setLoading(true);
-    fetchTrainingJobs()
-      .then(resp => setJobs(resp.jobs || resp || []))
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchUCModels()
+      .then(mdls => { setModels(Array.isArray(mdls) ? mdls : mdls.models || []); setError(null); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    loadJobs(true); // show spinner on first load only
-  }, [loadJobs]);
+  useEffect(() => { load(); }, [load]);
 
-  // Silent poll for active jobs
-  useEffect(() => {
-    const hasActive = jobs.some(j => j.status === 'RUNNING' || j.status === 'PENDING');
-    if (!hasActive) return;
-    const interval = setInterval(() => loadJobs(false), 15000);
-    return () => clearInterval(interval);
-  }, [jobs, loadJobs]);
-
-  const handleStart = async () => {
-    setStarting(true);
-    setError(null);
+  const handleActivate = async (model) => {
     try {
-      await startTrainingJob({ model_size: modelSize, epochs, batch_size: batchSize });
-      setShowConfig(false);
-      loadJobs(false);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setStarting(false);
-    }
+      await activateUCModel(model.name);
+      setSuccessMsg(`Modelo "${model.short_name}" ativado para deteccao`);
+      setTimeout(() => setSuccessMsg(null), 5000);
+      load();
+    } catch (err) { setError(err.message); }
   };
 
-  const handleExpandJob = async (jobId) => {
-    if (expandedJobId === jobId) {
-      setExpandedJobId(null);
-      return;
-    }
-    setExpandedJobId(jobId);
-    if (!jobDetails[jobId]) {
-      try {
-        const detail = await fetchJobDetail(jobId);
-        setJobDetails(prev => ({ ...prev, [jobId]: detail }));
-      } catch (err) {
-        setError(err.message);
-      }
-    }
-  };
-
-  const [publishing, setPublishing] = useState(null);
-  const [publishModal, setPublishModal] = useState(null); // { jobId, modelSize, epochs }
-  const [publishName, setPublishName] = useState('');
-
-  const openPublishModal = (job) => {
-    const suggested = `yolo_${job.model_size || 'n'}_e${job.epochs || 50}`;
-    setPublishName(suggested);
-    setPublishModal({ jobId: job.job_id });
-  };
-
-  const handlePublish = async () => {
-    if (!publishModal) return;
+  const handleDelete = async (model) => {
+    if (!window.confirm(`Excluir modelo "${model.short_name}" do Unity Catalog?`)) return;
     try {
-      setPublishing(publishModal.jobId);
-      setError(null);
-      setPublishModal(null);
-      const result = await publishJobModel(publishModal.jobId, publishName);
-      loadJobs(false);
-      const ucInfo = result.uc_model
-        ? ` | UC: ${result.uc_model} v${result.uc_version || '?'}`
-        : '';
-      const ucErr = result.uc_error
-        ? ` | Erro UC: ${result.uc_error}`
-        : '';
-      setSuccessMsg(`Modelo publicado e ativado!${ucInfo}${ucErr}`);
-      setTimeout(() => setSuccessMsg(null), 10000);
-    } catch (err) {
-      setError(`Falha ao publicar: ${err.message}`);
-    } finally {
-      setPublishing(null);
-    }
-  };
-
-  const formatDuration = (seconds) => {
-    if (!seconds) return '-';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.round(seconds % 60);
-    if (h > 0) return `${h}h ${m}m ${s}s`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
+      await deleteUCModel(model.name);
+      setSuccessMsg(`Modelo "${model.short_name}" excluido do UC`);
+      setTimeout(() => setSuccessMsg(null), 5000);
+      load();
+    } catch (err) { setError(err.message); }
   };
 
   return (
@@ -715,366 +1144,35 @@ function TrainingTab() {
       {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
       {successMsg && <div className="card" style={{ background: '#F0FDF4', borderLeft: '4px solid #10B981', padding: '12px 16px' }}><span style={{ color: '#166534' }}>{successMsg}</span></div>}
 
-      {/* Publish Modal */}
-      {publishModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: '#fff', borderRadius: 16, padding: 32, maxWidth: 480, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-            <h3 style={{ margin: '0 0 8px' }}>Publicar Modelo no Unity Catalog</h3>
-            <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 20px' }}>
-              O modelo sera registrado em <strong>jsf_demo_catalog.scenic_crawler</strong> com o nome abaixo.
-            </p>
-            <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>Nome do modelo no UC</label>
-            <input
-              className="inline-input"
-              style={{ width: '100%', fontSize: 14, padding: '10px 14px', marginBottom: 4 }}
-              value={publishName}
-              onChange={e => setPublishName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
-              placeholder="ex: yolo_expositores_v1"
-            />
-            <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 20 }}>
-              Nome completo: <code>jsf_demo_catalog.scenic_crawler.{publishName || '...'}</code>
-            </div>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setPublishModal(null)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handlePublish} disabled={!publishName}>
-                Publicar e Registrar no UC
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div style={{ marginBottom: 20 }}>
-        <button className="btn btn-primary" onClick={() => setShowConfig(!showConfig)}>
-          {showConfig ? 'Cancelar' : 'Iniciar Treinamento'}
-        </button>
-      </div>
-
-      {/* Training config panel */}
-      {showConfig && (
-        <div className="card training-config-panel">
-          <h3>Configuracao do Treinamento</h3>
-
-          {/* Model size */}
-          <div className="training-config-field">
-            <div className="training-config-label">
-              <span>Tamanho do Modelo</span>
-              <InfoTooltip
-                id="model-size"
-                text="Modelos maiores sao mais precisos mas demoram mais para treinar e para inferencia."
-                active={tooltipKey}
-                onToggle={setTooltipKey}
-              />
-            </div>
-            <div className="training-model-size-grid">
-              {MODEL_SIZES.map(ms => (
-                <div
-                  key={ms.value}
-                  className={`training-model-size-card ${modelSize === ms.value ? 'training-model-size-card-active' : ''}`}
-                  onClick={() => setModelSize(ms.value)}
-                >
-                  <div className="training-model-size-name">{ms.label}</div>
-                  <div className="training-model-size-desc">{ms.desc}</div>
-                  <div className="training-model-size-detail">{ms.detail}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Epochs */}
-          <div className="training-config-field">
-            <div className="training-config-label">
-              <span>Epochs: {epochs}</span>
-              <InfoTooltip
-                id="epochs"
-                text="Numero de vezes que o modelo vera todo o dataset durante o treinamento. Mais epochs = melhor ajuste, mas pode causar overfitting."
-                active={tooltipKey}
-                onToggle={setTooltipKey}
-              />
-            </div>
-            <input
-              type="range"
-              min="30"
-              max="300"
-              step="10"
-              value={epochs}
-              onChange={e => setEpochs(Number(e.target.value))}
-              className="training-slider"
-            />
-            <div className="training-slider-labels">
-              <span>30</span>
-              <span>100</span>
-              <span>200</span>
-              <span>300</span>
-            </div>
-          </div>
-
-          {/* Batch size */}
-          <div className="training-config-field">
-            <div className="training-config-label">
-              <span>Batch Size: {batchSize}</span>
-              <InfoTooltip
-                id="batch-size"
-                text="Numero de imagens processadas por vez. Batch maior = treino mais rapido mas exige mais memoria GPU."
-                active={tooltipKey}
-                onToggle={setTooltipKey}
-              />
-            </div>
-            <div className="training-batch-buttons">
-              {[8, 16, 32].map(bs => (
-                <button
-                  key={bs}
-                  className={`btn ${batchSize === bs ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setBatchSize(bs)}
-                >
-                  {bs}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginTop: 20 }}>
-            <button className="btn btn-primary" onClick={handleStart} disabled={starting}>
-              {starting ? 'Iniciando...' : 'Iniciar'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Training jobs list */}
-      {loading ? (
-        <div className="empty-state">Carregando treinamentos...</div>
-      ) : jobs.length === 0 ? (
-        <div className="empty-state">Nenhum treinamento realizado. Clique em "Iniciar Treinamento" para comecar.</div>
-      ) : (
-        <div className="training-jobs-list">
-          {jobs.map(job => {
-            const detail = jobDetails[job.job_id];
-            const isExpanded = expandedJobId === job.job_id;
-            return (
-              <div key={job.job_id} className="card training-job-card">
-                <div className="training-job-header" onClick={() => handleExpandJob(job.job_id)}>
-                  <div className="training-job-header-left">
-                    <span className="status-badge" style={{ background: JOB_STATUS_COLORS[job.status] || '#666' }}>
-                      {JOB_STATUS_LABELS[job.status] || job.status}
-                    </span>
-                    <span className="training-job-model">{job.model_size || '-'}</span>
-                    <span className="training-job-params">
-                      {job.epochs} epochs / batch {job.batch_size}
-                    </span>
-                  </div>
-                  <div className="training-job-header-right">
-                    <span className="training-job-duration">{formatDuration(job.duration_seconds)}</span>
-                    <span className="training-job-expand">{isExpanded ? '▲' : '▼'}</span>
-                  </div>
-                </div>
-
-                {isExpanded && (
-                  <div className="training-job-details">
-                    {/* Timestamps */}
-                    <div style={{ padding: '8px 12px', fontSize: 13, color: '#6B7280', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                      {job.started_at && <span>Inicio: {new Date(job.started_at).toLocaleString('pt-BR')}</span>}
-                      {job.completed_at && <span>Fim: {new Date(job.completed_at).toLocaleString('pt-BR')}</span>}
-                      {job.databricks_run_id && <span>Run ID: {job.databricks_run_id}</span>}
-                    </div>
-
-                    {job.status === 'COMPLETED' && (() => {
-                      const parsedMetrics = (() => {
-                        try {
-                          if (job.metrics_json) return JSON.parse(job.metrics_json);
-                        } catch (_) {}
-                        try {
-                          if (detail?.metrics_json) return JSON.parse(detail.metrics_json);
-                        } catch (_) {}
-                        return detail || {};
-                      })();
-                      return (
-                      <>
-                        {/* Metrics */}
-                        <div className="training-metrics-grid">
-                          <MetricCard label="mAP@50" value={parsedMetrics.map50} />
-                          <MetricCard label="mAP@50-95" value={parsedMetrics.map50_95} />
-                          <MetricCard label="Precision" value={parsedMetrics.precision} />
-                          <MetricCard label="Recall" value={parsedMetrics.recall} />
-                        </div>
-
-                        {/* Confusion matrix */}
-                        {(detail?.confusion_matrix || job.confusion_matrix) && (
-                          <div className="training-confusion-section">
-                            <h4>Matriz de Confusao</h4>
-                            <ConfusionMatrix data={detail?.confusion_matrix || job.confusion_matrix} />
-                          </div>
-                        )}
-
-                        <div style={{ marginTop: 16 }}>
-                          <button className="btn btn-primary" onClick={() => openPublishModal(job)} disabled={publishing === job.job_id}>
-                            {publishing === job.job_id ? 'Publicando...' : 'Publicar Modelo'}
-                          </button>
-                        </div>
-                      </>
-                      );
-                    })()}
-
-                    {job.status === 'PENDING' && (
-                      <div style={{ padding: 12, color: '#6B7280' }}>
-                        Aguardando inicio do cluster Databricks...
-                      </div>
-                    )}
-
-                    {job.status === 'RUNNING' && (
-                      <div className="training-job-progress" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12 }}>
-                        <div className="training-progress-bar-track">
-                          <div
-                            className="training-progress-bar-fill training-progress-bar-indeterminate"
-                            style={{ width: '30%', animation: 'training-progress-slide 1.5s ease-in-out infinite' }}
-                          />
-                        </div>
-                        <span className="training-progress-label">Treinando...</span>
-                        <style>{`
-                          @keyframes training-progress-slide {
-                            0% { margin-left: 0%; }
-                            50% { margin-left: 70%; }
-                            100% { margin-left: 0%; }
-                          }
-                        `}</style>
-                      </div>
-                    )}
-
-                    {job.status === 'FAILED' && (
-                      <div style={{ padding: 12, background: '#FEF2F2', borderRadius: 8, margin: '8px 12px' }}>
-                        <div style={{ fontWeight: 600, color: '#991B1B', marginBottom: 4 }}>Falha no treinamento</div>
-                        <div className="error-text" style={{ fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {job.error_message || 'Erro desconhecido. Verifique os logs do Databricks.'}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </>
-  );
-}
-
-function MetricCard({ label, value }) {
-  const formatted = value != null ? (typeof value === 'number' ? (value * 100).toFixed(1) + '%' : value) : '-';
-  const numericVal = typeof value === 'number' ? value : null;
-  let color = '#666';
-  if (numericVal !== null) {
-    if (numericVal >= 0.8) color = '#10B981';
-    else if (numericVal >= 0.5) color = '#F59E0B';
-    else color = '#EF4444';
-  }
-
-  return (
-    <div className="training-metric-card">
-      <div className="training-metric-value" style={{ color }}>{formatted}</div>
-      <div className="training-metric-label">{label}</div>
-    </div>
-  );
-}
-
-function ConfusionMatrix({ data }) {
-  if (!data || !data.labels || !data.matrix) return null;
-  const { labels, matrix } = data;
-  const maxVal = Math.max(...matrix.flat(), 1);
-
-  return (
-    <div className="training-confusion-table-wrapper">
-      <table className="training-confusion-table">
-        <thead>
-          <tr>
-            <th></th>
-            {labels.map(l => <th key={l}>{l}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {labels.map((rowLabel, ri) => (
-            <tr key={rowLabel}>
-              <td className="training-confusion-row-label">{rowLabel}</td>
-              {matrix[ri].map((val, ci) => {
-                const intensity = val / maxVal;
-                const isDiag = ri === ci;
-                const bg = isDiag
-                  ? `rgba(16, 185, 129, ${0.1 + intensity * 0.7})`
-                  : val > 0
-                    ? `rgba(239, 68, 68, ${0.1 + intensity * 0.5})`
-                    : '#f9fafb';
-                return (
-                  <td key={ci} className="training-confusion-cell" style={{ background: bg }}>
-                    {val}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function InfoTooltip({ id, text, active, onToggle }) {
-  return (
-    <span className="info-icon-wrapper">
-      <span
-        className="info-icon"
-        onMouseEnter={() => onToggle(id)}
-        onMouseLeave={() => onToggle(null)}
-      >
-        i
-      </span>
-      {active === id && <span className="info-tooltip">{text}</span>}
-    </span>
-  );
-}
-
-/* ========== MODELS TAB ========== */
-function ModelsTab() {
-  const [models, setModels] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    fetchTrainedModels()
-      .then(mdls => { setModels(mdls.models || mdls || []); setError(null); })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  return (
-    <>
-      {error && <div className="card" style={{ background: '#FEF2F2' }}><span className="error-text">{error}</span></div>}
       <div className="card">
-        <h3>Modelos YOLO Treinados</h3>
+        <h3>Modelos YOLO no Unity Catalog</h3>
+        <p style={{ fontSize: 13, color: '#6B7280', margin: '0 0 16px' }}>
+          Modelos registrados em <code>jsf_demo_catalog.scenic_crawler</code>. Ative um modelo para usa-lo na deteccao.
+        </p>
         {loading ? (
-          <div className="empty-state">Carregando modelos...</div>
+          <div className="empty-state">Carregando modelos do UC...</div>
         ) : models.length === 0 ? (
-          <div className="empty-state">Nenhum modelo treinado. Treine um modelo na aba "Treinamentos".</div>
+          <div className="empty-state">Nenhum modelo registrado no Unity Catalog. Treine e publique um modelo na aba Datasets.</div>
         ) : (
           <table className="data-table">
             <thead>
-              <tr><th>Nome</th><th>Criado em</th><th>mAP@50</th><th>Precision</th><th>Recall</th><th>Status</th><th>Acoes</th></tr>
+              <tr><th>Nome</th><th>Versao</th><th>Status</th><th>Criado em</th><th>Acoes</th></tr>
             </thead>
             <tbody>
               {models.map(model => (
-                <tr key={model.model_id}>
-                  <td className="filename">{model.model_name || '-'}</td>
-                  <td>{model.created_at ? new Date(model.created_at).toLocaleDateString('pt-BR') : '-'}</td>
-                  <td>{model.map50 != null ? (model.map50 * 100).toFixed(1) + '%' : '-'}</td>
-                  <td>{(model.precision_val ?? model.precision) != null ? ((model.precision_val ?? model.precision) * 100).toFixed(1) + '%' : '-'}</td>
-                  <td>{(model.recall_val ?? model.recall) != null ? ((model.recall_val ?? model.recall) * 100).toFixed(1) + '%' : '-'}</td>
-                  <td>{model.is_active ? <span className="status-badge" style={{ background: '#10B981' }}>ATIVO</span> : <span className="status-badge" style={{ background: '#6B7280' }}>Inativo</span>}</td>
+                <tr key={model.name + model.version}>
+                  <td className="filename">{model.short_name}</td>
+                  <td>v{model.version}</td>
+                  <td>
+                    {model.is_active
+                      ? <span className="status-badge" style={{ background: '#10B981' }}>ATIVO</span>
+                      : <span className="status-badge" style={{ background: '#6B7280' }}>Inativo</span>}
+                  </td>
+                  <td>{model.created_at ? new Date(model.created_at * 1000).toLocaleDateString('pt-BR') : '-'}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      {!model.is_active && <button className="btn btn-sm btn-primary" onClick={async () => { await activateModel(model.model_id); load(); }}>Ativar</button>}
-                      <button className="btn btn-sm btn-danger" onClick={async () => { if (window.confirm('Excluir?')) { await deleteModel(model.model_id); load(); } }}>Excluir</button>
+                      {!model.is_active && <button className="btn btn-sm btn-primary" onClick={() => handleActivate(model)}>Ativar</button>}
+                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(model)}>Excluir</button>
                     </div>
                   </td>
                 </tr>
@@ -1084,6 +1182,27 @@ function ModelsTab() {
         )}
       </div>
     </>
+  );
+}
+
+
+/* ================================================================
+   HELPER COMPONENTS
+   ================================================================ */
+function MetricCard({ label, value }) {
+  const formatted = value != null ? (typeof value === 'number' ? (value * 100).toFixed(1) + '%' : value) : '-';
+  const numericVal = typeof value === 'number' ? value : null;
+  let color = '#666';
+  if (numericVal !== null) {
+    if (numericVal >= 0.8) color = '#10B981';
+    else if (numericVal >= 0.5) color = '#F59E0B';
+    else color = '#EF4444';
+  }
+  return (
+    <div className="training-metric-card">
+      <div className="training-metric-value" style={{ color }}>{formatted}</div>
+      <div className="training-metric-label">{label}</div>
+    </div>
   );
 }
 
