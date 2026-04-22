@@ -1260,38 +1260,37 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
         uc_full_name = f"jsf_demo_catalog.scenic_crawler.{uc_short_name}"
 
         w = get_workspace_client()
-        import io as _io
 
-        # Step 1: Download model weights (try best.pt then last.pt)
-        model_bytes = None
-        paths_to_try = [model_path_vol]
-        if '/trained_models/' in model_path_vol:
-            paths_to_try.append(model_path_vol.replace('/trained_models/', '/yolo_models/'))
+        # Step 1: Find existing weights directory (no download/re-upload needed)
+        uc_source_path = None
         if job.get("results_path"):
-            paths_to_try.append(f"{job['results_path']}/train/weights/best.pt")
-            paths_to_try.append(f"{job['results_path']}/train/weights/last.pt")
-        for p in list(paths_to_try):
-            if p.endswith('best.pt'):
-                paths_to_try.append(p.replace('best.pt', 'last.pt'))
-
-        for try_path in paths_to_try:
+            # The training script uploads weights to {results_path}/train/weights/
+            candidate = f"{job['results_path']}/train/weights"
             try:
-                resp_dl = w.files.download(try_path)
-                model_bytes = resp_dl.contents.read()
-                if model_bytes and len(model_bytes) > 100:
-                    logger.info(f"Downloaded model from: {try_path} ({len(model_bytes)} bytes)")
-                    break
-                model_bytes = None
+                # Check if directory has files
+                files_found = list(w.files.list_directory_contents(candidate))
+                if files_found:
+                    uc_source_path = candidate
+                    logger.info(f"Found weights at: {candidate}")
             except Exception:
-                continue
+                pass
 
-        if not model_bytes:
-            raise ValueError(f"Model weights not found in Volume")
+        if not uc_source_path:
+            # Fallback: use the model_path parent dir
+            if model_path_vol:
+                parent = model_path_vol.rsplit("/", 1)[0]
+                for try_dir in [parent, parent.replace('/trained_models/', '/yolo_models/')]:
+                    try:
+                        files_found = list(w.files.list_directory_contents(try_dir))
+                        if files_found:
+                            uc_source_path = try_dir
+                            logger.info(f"Found weights at: {try_dir}")
+                            break
+                    except Exception:
+                        continue
 
-        # Step 2: Upload to a dedicated UC source path
-        uc_source_path = f"/Volumes/jsf_demo_catalog/scenic_crawler/yolo_models/uc_{uc_short_name}_{model_id}"
-        w.files.upload(f"{uc_source_path}/model.pt", _io.BytesIO(model_bytes), overwrite=True)
-        logger.info(f"Uploaded model to {uc_source_path}/model.pt ({len(model_bytes)} bytes)")
+        if not uc_source_path:
+            raise ValueError("Model weights directory not found in Volume")
 
         # Step 3: Create registered model in UC via SDK
         try:
