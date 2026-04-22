@@ -1294,15 +1294,22 @@ async def publish_job_model(job_id: int, payload: PublishPayload = None):
         # Step 2: Copy model weights to a UC-accessible location
         import io as _io
 
-        # Try to download model - handle old paths pointing to nonexistent volumes
+        # Try to download model - handle missing best.pt (fallback to last.pt)
         model_bytes = None
-        paths_to_try = [model_path_vol]
-        # If path has old "trained_models" volume, also try "yolo_models"
-        if '/trained_models/' in model_path_vol:
-            paths_to_try.append(model_path_vol.replace('/trained_models/', '/yolo_models/'))
-        # Also try the job's results_path directly
+        paths_to_try = []
+        for base_path in [model_path_vol]:
+            paths_to_try.append(base_path)
+            # If path has old "trained_models" volume, also try "yolo_models"
+            if '/trained_models/' in base_path:
+                paths_to_try.append(base_path.replace('/trained_models/', '/yolo_models/'))
+        # Also try from job's results_path with best.pt and last.pt
         if job.get("results_path"):
             paths_to_try.append(f"{job['results_path']}/train/weights/best.pt")
+            paths_to_try.append(f"{job['results_path']}/train/weights/last.pt")
+        # Also try last.pt variant of the original path
+        for p in list(paths_to_try):
+            if p.endswith('best.pt'):
+                paths_to_try.append(p.replace('best.pt', 'last.pt'))
 
         download_error = None
         for try_path in paths_to_try:
