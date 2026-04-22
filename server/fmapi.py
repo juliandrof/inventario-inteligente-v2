@@ -18,10 +18,21 @@ _DEFAULT_FIXTURE_TYPES = [
 ]
 
 
-def get_fixture_types() -> list[dict]:
-    """Load fixture types from DB, fallback to defaults."""
+def get_fixture_types(context_id: int = None) -> list[dict]:
+    """Load fixture/object types from DB, fallback to defaults.
+
+    If context_id is provided, reads from context_object_types for that context.
+    Otherwise falls back to fixture_types table.
+    """
     try:
         from server.database import execute_query
+        if context_id:
+            rows = execute_query(
+                "SELECT name, description FROM context_object_types WHERE context_id = %(cid)s ORDER BY name",
+                {"cid": context_id}
+            )
+            if rows:
+                return rows
         rows = execute_query("SELECT name, description FROM fixture_types ORDER BY name")
         if rows:
             return rows
@@ -30,8 +41,31 @@ def get_fixture_types() -> list[dict]:
     return [{"name": t, "description": ""} for t in _DEFAULT_FIXTURE_TYPES]
 
 
-def get_fixture_type_names() -> list[str]:
-    return [ft["name"] for ft in get_fixture_types()]
+def get_fixture_type_names(context_id: int = None) -> list[str]:
+    return [ft["name"] for ft in get_fixture_types(context_id)]
+
+
+def _get_context_info(context_id: int = None) -> dict:
+    """Load context metadata (description, display_name) for prompt building."""
+    if not context_id:
+        return {
+            "display_name": "Expositores de Loja",
+            "description": "Mobiliario e expositores de lojas de varejo: gondolas, araras, balcoes, prateleiras, displays",
+        }
+    try:
+        from server.database import execute_query
+        rows = execute_query(
+            "SELECT display_name, description FROM contexts WHERE context_id = %(cid)s",
+            {"cid": context_id}
+        )
+        if rows:
+            return {"display_name": rows[0]["display_name"], "description": rows[0]["description"] or ""}
+    except Exception:
+        pass
+    return {
+        "display_name": "Expositores de Loja",
+        "description": "Mobiliario e expositores de lojas de varejo",
+    }
 
 
 def _get_model() -> str:
@@ -81,15 +115,15 @@ def _call_serving(payload: dict, timeout: int = 120) -> dict:
         raise RuntimeError(f"FMAPI HTTP {e.code}: {body[:300]}")
 
 
-def analyze_frame_fixtures(frame_b64: str) -> list[dict]:
-    """Analyze a frame and detect retail fixtures.
+def analyze_frame_fixtures(frame_b64: str, context_id: int = None) -> list[dict]:
+    """Analyze a frame and detect objects based on context.
 
     Returns list of dicts:
     [{"type": "GONDOLA", "position": {"x": 30, "y": 50}, "zone": "MIDDLE",
       "occupancy": "FULL", "occupancy_pct": 85, "confidence": 0.9,
       "description": "Gondola de produtos de limpeza"}]
     """
-    fixture_types = get_fixture_types()
+    fixture_types = get_fixture_types(context_id)
     type_names = [ft["name"] for ft in fixture_types]
     types_str = ", ".join(type_names)
 
@@ -98,20 +132,25 @@ def analyze_frame_fixtures(frame_b64: str) -> list[dict]:
         f"- {ft['name']}: {ft['description']}" for ft in fixture_types if ft.get("description")
     )
 
+    # Build context-aware prompts
+    ctx_info = _get_context_info(context_id)
+    ctx_display = ctx_info["display_name"]
+    ctx_desc = ctx_info["description"]
+
     system_prompt = (
-        "Voce e um sistema de deteccao de objetos especializado em mobiliario de lojas de varejo. "
+        f"Voce e um sistema de deteccao de objetos especializado em {ctx_desc}. "
         "Para cada objeto detectado, retorna tipo, posicao precisa e metadados. "
         "Retorne APENAS um array JSON valido. Sem markdown, sem code fences, sem texto extra."
     )
 
-    user_prompt = f"""TAREFA: Detectar todos os expositores/mobiliarios de loja nesta imagem.
+    user_prompt = f"""TAREFA: Detectar todos os objetos do tipo '{ctx_display}' nesta imagem.
 
 TIPOS VALIDOS:
 {type_descriptions}
 
 INSTRUCOES DE DETECCAO:
 1. Examine a imagem sistematicamente da esquerda para a direita, de cima para baixo
-2. Identifique CADA expositor fisico individual visivel
+2. Identifique CADA objeto individual visivel dos tipos listados acima
 3. Para cada um, determine a posicao do CENTRO do objeto como percentual da imagem:
    - "x": 0 = borda esquerda, 100 = borda direita
    - "y": 0 = topo, 100 = base
@@ -120,8 +159,8 @@ INSTRUCOES DE DETECCAO:
    - "bbox_h": altura do objeto como % da altura total da imagem (ex: gondola alta = 40-70, mesa baixa = 15-30)
    - Os valores devem refletir o tamanho REAL do objeto na imagem, nao um valor fixo
 5. Dois objetos do MESMO tipo so devem ser reportados separados se estao FISICAMENTE separados (distancia visivel entre eles)
-6. Se um expositor esta parcialmente cortado na borda, reporte apenas se >30% esta visivel
-7. NAO reporte o mesmo expositor mais de uma vez
+6. Se um objeto esta parcialmente cortado na borda, reporte apenas se >30% esta visivel
+7. NAO reporte o mesmo objeto mais de uma vez
 
 CRITERIOS DE CONFIANCA:
 - >= 0.8: certeza alta de que e esse tipo
@@ -132,7 +171,7 @@ FORMATO (array JSON):
 [{{"type": "TIPO", "position": {{"x": 35, "y": 48}}, "bbox_w": 25, "bbox_h": 40, "zone": "FRENTE|MEIO|FUNDO|ESQUERDA|DIREITA", "occupancy": "VAZIO|PARCIAL|CHEIO", "occupancy_pct": 75, "confidence": 0.92, "description": "descricao breve em portugues"}}]
 
 Tipos validos: {types_str}
-Se nao encontrar nenhum expositor, retorne []"""
+Se nao encontrar nenhum objeto dos tipos listados, retorne []"""
 
     payload = {
         "messages": [

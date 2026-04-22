@@ -41,18 +41,26 @@ def _get_active_model_info() -> Optional[dict]:
     return None
 
 
-def _get_class_names() -> list[str]:
-    """Get fixture type names sorted by name (same order as YOLO training export)."""
+def _get_class_names(context_id: int = None) -> list[str]:
+    """Get object type names sorted by name (same order as YOLO training export).
+
+    If context_id is provided, reads from context_object_types first.
+    """
     try:
+        if context_id:
+            rows = execute_query(
+                "SELECT name FROM context_object_types WHERE context_id = %(cid)s ORDER BY name",
+                {"cid": context_id}
+            )
+            if rows:
+                return [r["name"] for r in rows]
         rows = execute_query("SELECT name FROM fixture_types ORDER BY name")
         if rows:
             return [r["name"] for r in rows]
     except Exception as e:
-        logger.warning(f"Failed to load fixture_types from DB: {e}")
+        logger.warning(f"Failed to load class names from DB: {e}")
 
     # Fallback - must match fixture_types table ORDER BY name
-    # IMPORTANT: This must stay in sync with the DB. If you add types to
-    # fixture_types, add them here too in alphabetical order.
     return [
         "ARARA", "BALCAO", "CABIDEIRO_PAREDE", "CESTAO",
         "DISPLAY", "GONDOLA", "PRATELEIRA",
@@ -138,7 +146,7 @@ def _compute_zone(x_pct: float, y_pct: float) -> str:
         return "MEIO"
 
 
-def detect_fixtures_yolo(frame_b64: str) -> list[dict]:
+def detect_fixtures_yolo(frame_b64: str, context_id: int = None) -> list[dict]:
     """Run YOLO inference on a base64-encoded frame.
 
     Returns detections in the same format as analyze_frame_fixtures:
@@ -154,7 +162,7 @@ def detect_fixtures_yolo(frame_b64: str) -> list[dict]:
     if model is None:
         logger.warning("YOLO model unavailable, falling back to LLM detection")
         from server.fmapi import analyze_frame_fixtures
-        return analyze_frame_fixtures(frame_b64)
+        return analyze_frame_fixtures(frame_b64, context_id=context_id)
 
     try:
         frame = _decode_frame(frame_b64)
@@ -163,7 +171,7 @@ def detect_fixtures_yolo(frame_b64: str) -> list[dict]:
             return []
 
         img_h, img_w = frame.shape[:2]
-        class_names = _get_class_names()
+        class_names = _get_class_names(context_id)
 
         # Run inference - lower threshold for custom-trained models on limited data
         results = model(frame, conf=0.15, iou=0.45, verbose=False)
@@ -211,10 +219,10 @@ def detect_fixtures_yolo(frame_b64: str) -> list[dict]:
         # Fallback to LLM
         logger.info("Falling back to LLM detection after YOLO failure")
         from server.fmapi import analyze_frame_fixtures
-        return analyze_frame_fixtures(frame_b64)
+        return analyze_frame_fixtures(frame_b64, context_id=context_id)
 
 
-def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
+def detect_fixtures_hybrid(frame_b64: str, context_id: int = None) -> list[dict]:
     """YOLO detection + LLM for occupancy and description.
 
     Uses YOLO for fast bounding box detection, then crops each detected
@@ -226,7 +234,7 @@ def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
     if model is None:
         logger.warning("YOLO model unavailable, falling back to LLM detection")
         from server.fmapi import analyze_frame_fixtures
-        return analyze_frame_fixtures(frame_b64)
+        return analyze_frame_fixtures(frame_b64, context_id=context_id)
 
     try:
         frame = _decode_frame(frame_b64)
@@ -235,7 +243,7 @@ def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
             return []
 
         img_h, img_w = frame.shape[:2]
-        class_names = _get_class_names()
+        class_names = _get_class_names(context_id)
 
         # Run YOLO inference - lower threshold for custom-trained models
         results = model(frame, conf=0.15, iou=0.45, verbose=False)
@@ -331,7 +339,7 @@ def detect_fixtures_hybrid(frame_b64: str) -> list[dict]:
         logger.error(f"Hybrid inference failed: {e}", exc_info=True)
         logger.info("Falling back to LLM detection after hybrid failure")
         from server.fmapi import analyze_frame_fixtures
-        return analyze_frame_fixtures(frame_b64)
+        return analyze_frame_fixtures(frame_b64, context_id=context_id)
 
 
 def _analyze_crop_occupancy(crop_b64: str, fixture_type: str) -> tuple[str, float, str]:

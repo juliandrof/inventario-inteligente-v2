@@ -44,6 +44,7 @@ class StartJobPayload(BaseModel):
     epochs: int = 50
     batch_size: int = 16
     cluster_spec: Optional[dict] = None
+    context_id: Optional[int] = None
 
 
 class DetectionModePayload(BaseModel):
@@ -226,14 +227,14 @@ async def training_debug():
 
 
 @router.post("/images/upload")
-async def upload_training_image(file: UploadFile = File(...)):
+async def upload_training_image(file: UploadFile = File(...), context_id: int = Query(None)):
     """Upload a training image (or video, extracting 1 frame/sec) to Volume."""
     import io
     import traceback
     from PIL import Image as PILImage
 
     try:
-        return await _do_upload(file, io, PILImage)
+        return await _do_upload(file, io, PILImage, context_id=context_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -241,7 +242,7 @@ async def upload_training_image(file: UploadFile = File(...)):
         raise HTTPException(500, f"Upload failed: {type(e).__name__}: {e}")
 
 
-async def _do_upload(file, io, PILImage):
+async def _do_upload(file, io, PILImage, context_id=None):
     filename = file.filename or f"image_{int(time.time() * 1000)}.jpg"
 
     content = await file.read()
@@ -273,9 +274,9 @@ async def _do_upload(file, io, PILImage):
             w_client.files.upload(original_path, io.BytesIO(content), overwrite=True)
             orig_id = int(time.time() * 1000) - 1
             execute_update("""
-                INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
-                VALUES (%(iid)s, %(fn)s, %(vp)s, 0, 0, -1, %(sg)s, NOW())
-            """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": filename})
+                INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
+                VALUES (%(iid)s, %(fn)s, %(vp)s, 0, 0, -1, %(sg)s, NOW(), %(ctx)s)
+            """, {"iid": orig_id, "fn": f"{name_base}_original.{ext}", "vp": original_path, "sg": filename, "ctx": context_id})
 
             created_records = []
             seconds = 0
@@ -295,9 +296,9 @@ async def _do_upload(file, io, PILImage):
 
                     image_id = int(time.time() * 1000) + seconds
                     execute_update("""
-                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
-                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
-                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename})
+                        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
+                        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW(), %(ctx)s)
+                    """, {"iid": image_id, "fn": frame_filename, "vp": frame_volume_path, "w": w_frame, "h": h_frame, "sg": filename, "ctx": context_id})
 
                     created_records.append({
                         "image_id": image_id,
@@ -343,9 +344,9 @@ async def _do_upload(file, io, PILImage):
 
     image_id = int(time.time() * 1000)
     execute_update("""
-        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at)
-        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW())
-    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height, "sg": filename})
+        INSERT INTO training_images (image_id, filename, volume_path, width, height, annotation_count, source_group, uploaded_at, context_id)
+        VALUES (%(iid)s, %(fn)s, %(vp)s, %(w)s, %(h)s, 0, %(sg)s, NOW(), %(ctx)s)
+    """, {"iid": image_id, "fn": filename, "vp": volume_path, "w": width, "h": height, "sg": filename, "ctx": context_id})
 
     return {
         "image_id": image_id,
@@ -357,19 +358,24 @@ async def _do_upload(file, io, PILImage):
 
 
 @router.get("/groups")
-async def list_training_groups():
+async def list_training_groups(context_id: int = Query(None)):
     """List training sources grouped (1 entry per video/image upload)."""
-    groups = execute_query("""
+    ctx_cond = ""
+    params = {}
+    if context_id:
+        ctx_cond = " WHERE context_id = %(ctx)s"
+        params["ctx"] = context_id
+    groups = execute_query(f"""
         SELECT COALESCE(source_group, filename) as source_name,
             COUNT(*) FILTER (WHERE annotation_count >= 0) as frame_count,
             SUM(COALESCE(annotation_count, 0)) FILTER (WHERE annotation_count >= 0) as total_annotations,
             MIN(image_id) FILTER (WHERE annotation_count >= 0) as first_image_id,
             MIN(uploaded_at) as uploaded_at,
             BOOL_OR(filename LIKE '%%_original.%%') as has_video
-        FROM training_images
+        FROM training_images{ctx_cond}
         GROUP BY COALESCE(source_group, filename)
         ORDER BY MIN(uploaded_at) DESC
-    """)
+    """, params)
     for g in groups:
         g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
         if g.get("has_video"):
@@ -876,13 +882,13 @@ async def start_training_job(payload: StartJobPayload):
     # Save initial job record
     execute_update("""
         INSERT INTO training_jobs
-        (job_id, model_size, epochs, batch_size, status, started_at)
-        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW())
-    """, {"jid": job_id, "ms": payload.model_size, "ep": payload.epochs, "bs": payload.batch_size})
+        (job_id, model_size, epochs, batch_size, status, started_at, context_id)
+        VALUES (%(jid)s, %(ms)s, %(ep)s, %(bs)s, 'PENDING', NOW(), %(ctx)s)
+    """, {"jid": job_id, "ms": payload.model_size, "ep": payload.epochs, "bs": payload.batch_size, "ctx": payload.context_id})
 
     try:
         # Step 1: Export dataset
-        dataset_path = export_yolo_dataset()
+        dataset_path = export_yolo_dataset(context_id=payload.context_id)
 
         # Step 2: Generate training script
         script, results_path = generate_training_script(

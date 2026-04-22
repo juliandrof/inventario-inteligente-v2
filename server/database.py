@@ -356,6 +356,49 @@ def _auto_create_tables(conn):
     except Exception as e:
         logger.warning(f"ALTER media_type: {e}")
 
+    # --- Context system tables ---
+    context_tables = [
+        ("CREATE TABLE contexts", """
+            CREATE TABLE IF NOT EXISTS contexts (
+                context_id BIGINT PRIMARY KEY,
+                name VARCHAR(200) NOT NULL UNIQUE,
+                display_name VARCHAR(300) NOT NULL,
+                description TEXT,
+                icon VARCHAR(50) DEFAULT '📦',
+                color VARCHAR(20) DEFAULT '#2563EB',
+                is_default BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """),
+        ("CREATE TABLE context_object_types", """
+            CREATE TABLE IF NOT EXISTS context_object_types (
+                type_id SERIAL PRIMARY KEY,
+                context_id BIGINT NOT NULL REFERENCES contexts(context_id) ON DELETE CASCADE,
+                name VARCHAR(100) NOT NULL,
+                display_name VARCHAR(200) NOT NULL,
+                description TEXT,
+                icon VARCHAR(50),
+                color VARCHAR(20) DEFAULT '#2563EB',
+                UNIQUE(context_id, name)
+            )
+        """),
+    ]
+    for label, sql in context_tables:
+        try:
+            cur.execute(sql)
+        except Exception as e:
+            logger.warning(f"Auto-setup [{label}]: {e}")
+
+    # Add context_id column to existing tables
+    context_id_tables = ['videos', 'fixtures', 'fixture_summary', 'anomalies',
+                         'training_images', 'training_jobs', 'trained_models']
+    for tbl in context_id_tables:
+        try:
+            cur.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS context_id BIGINT")
+        except Exception as e:
+            logger.warning(f"ALTER context_id on {tbl}: {e}")
+
     # Indexes
     indexes = [
         "CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status)",
@@ -367,6 +410,14 @@ def _auto_create_tables(conn):
         "CREATE INDEX IF NOT EXISTS idx_summary_store ON fixture_summary(store_id)",
         "CREATE INDEX IF NOT EXISTS idx_summary_uf ON fixture_summary(uf)",
         "CREATE INDEX IF NOT EXISTS idx_stores_uf ON stores(uf)",
+        # Context indexes
+        "CREATE INDEX IF NOT EXISTS idx_videos_context ON videos(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_fixtures_context ON fixtures(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_summary_context ON fixture_summary(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_anomalies_context ON anomalies(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_training_images_context ON training_images(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_training_jobs_context ON training_jobs(context_id)",
+        "CREATE INDEX IF NOT EXISTS idx_trained_models_context ON trained_models(context_id)",
     ]
     for idx_sql in indexes:
         try:
@@ -449,6 +500,37 @@ def _auto_create_tables(conn):
             """, {"id": int(time.time() * 1000)})
     except Exception as e:
         logger.warning(f"Seed header_bg_color: {e}")
+
+    # Seed default context and migrate fixture_types
+    try:
+        cur.execute("SELECT COUNT(*) FROM contexts")
+        if cur.fetchone()[0] == 0:
+            ctx_id = int(time.time() * 1000)
+            cur.execute("""
+                INSERT INTO contexts (context_id, name, display_name, description, icon, is_default)
+                VALUES (%s, 'expositores_loja', 'Expositores de Loja',
+                        'Mobiliario e expositores de lojas de varejo: gondolas, araras, balcoes, prateleiras, displays',
+                        '🏪', TRUE)
+            """, (ctx_id,))
+            # Migrate fixture_types to context_object_types
+            cur.execute("SELECT name, display_name, description, icon, color FROM fixture_types")
+            for row in cur.fetchall():
+                try:
+                    cur.execute("""
+                        INSERT INTO context_object_types (context_id, name, display_name, description, icon, color)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (ctx_id, row[0], row[1], row[2], row[3], row[4]))
+                except Exception:
+                    pass
+            # Backfill context_id on existing data
+            for table in ['videos', 'fixtures', 'fixture_summary', 'anomalies', 'training_images', 'training_jobs', 'trained_models']:
+                try:
+                    cur.execute(f"UPDATE {table} SET context_id = %s WHERE context_id IS NULL", (ctx_id,))
+                except Exception:
+                    pass
+            logger.info("Default context seeded and fixture_types migrated")
+    except Exception as e:
+        logger.warning(f"Context migration: {e}")
 
     cur.close()
 

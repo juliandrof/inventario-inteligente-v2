@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from server.database import init_db_pool, close_db_pool
-from server.routes import videos, dashboard, analysis, review, reports, thumbnails, configurations, branding, training
+from server.routes import videos, dashboard, analysis, review, reports, thumbnails, configurations, branding, training, contexts
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,6 +63,7 @@ app.include_router(thumbnails.router, prefix="/api/thumbnails", tags=["Thumbnail
 app.include_router(configurations.router, prefix="/api/config", tags=["Configurations"])
 app.include_router(branding.router, prefix="/api/branding", tags=["Branding"])
 app.include_router(training.router, prefix="/api/training", tags=["Training"])
+app.include_router(contexts.router, prefix="/api/contexts", tags=["Contexts"])
 
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 

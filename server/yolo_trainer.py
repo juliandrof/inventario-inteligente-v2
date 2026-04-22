@@ -18,7 +18,7 @@ DATASET_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/yolo_datasets"
 MODELS_VOLUME = f"/Volumes/{CATALOG}/{SCHEMA}/yolo_models"
 
 
-def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
+def export_yolo_dataset(output_volume_path: Optional[str] = None, context_id: Optional[int] = None) -> str:
     """Export training images + annotations as a ZIP file to a Volume.
 
     The ZIP contains the full YOLO dataset structure:
@@ -38,7 +38,16 @@ def export_yolo_dataset(output_volume_path: Optional[str] = None) -> str:
 
     w = get_workspace_client()
 
-    fixture_rows = execute_query("SELECT name FROM fixture_types ORDER BY name")
+    # Use context_object_types if context_id is provided, otherwise fixture_types
+    if context_id:
+        fixture_rows = execute_query(
+            "SELECT name FROM context_object_types WHERE context_id = %(cid)s ORDER BY name",
+            {"cid": context_id}
+        )
+    else:
+        fixture_rows = []
+    if not fixture_rows:
+        fixture_rows = execute_query("SELECT name FROM fixture_types ORDER BY name")
     class_names = [r["name"] for r in fixture_rows]
     class_map = {name: idx for idx, name in enumerate(class_names)}
 

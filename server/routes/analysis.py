@@ -11,6 +11,7 @@ router = APIRouter()
 async def list_fixtures(
     uf: Optional[str] = None, store_id: Optional[str] = None,
     fixture_type: Optional[str] = None, video_id: Optional[int] = None,
+    context_id: Optional[int] = None,
     limit: int = Query(100), offset: int = Query(0),
 ):
     conds, params = [], {"limit": limit, "offset": offset}
@@ -26,6 +27,9 @@ async def list_fixtures(
     if video_id:
         conds.append("f.video_id = %(vid)s")
         params["vid"] = video_id
+    if context_id:
+        conds.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
 
     w = ("WHERE " + " AND ".join(conds)) if conds else ""
 

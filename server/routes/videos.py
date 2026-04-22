@@ -5,13 +5,24 @@ import time
 import logging
 import tempfile
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from server.database import execute_query, execute_update, get_workspace_client
 from server.video_processor import parse_video_filename, get_video_metadata, ensure_store_exists, is_image_file
 from server.background_worker import ProcessingWorker
 from PIL import Image as PILImage
+
+
+def _get_default_context_id() -> int:
+    """Return the default context_id, or None if no contexts exist."""
+    try:
+        rows = execute_query("SELECT context_id FROM contexts WHERE is_default = TRUE LIMIT 1")
+        if rows:
+            return rows[0]["context_id"]
+    except Exception:
+        pass
+    return None
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -20,14 +31,20 @@ VIDEO_VOLUME = os.environ.get("VIDEO_VOLUME", "/Volumes/scenic_crawler/default/u
 
 
 @router.post("/upload")
-async def upload_media(file: UploadFile = File(...)):
-    """Upload a video or photo. Filename must follow UF_IDLOJA_yyyymmdd.ext"""
+async def upload_media(file: UploadFile = File(...), context_id: int = Form(None)):
+    """Upload a video or photo. Filename should follow UF_IDLOJA_yyyymmdd.ext (best-effort parsing)."""
     filename = file.filename or "unknown.mp4"
 
     try:
         parsed = parse_video_filename(filename)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError:
+        # Best-effort defaults when filename doesn't match expected pattern
+        from datetime import date
+        parsed = {"uf": "XX", "store_id": "0000", "video_date": date.today()}
+
+    # Resolve context_id: use provided, or fall back to default
+    if not context_id:
+        context_id = _get_default_context_id()
 
     ensure_store_exists(parsed["store_id"], parsed["uf"])
     is_photo = is_image_file(filename)
@@ -56,13 +73,13 @@ async def upload_media(file: UploadFile = File(...)):
                 INSERT INTO videos
                 (video_id, filename, volume_path, uf, store_id, video_date,
                  file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type)
+                 upload_timestamp, status, media_type, context_id)
                 VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO')
+                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO', %(ctx)s)
             """, {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
-                "size": len(content), "res": resolution,
+                "size": len(content), "res": resolution, "ctx": context_id,
             })
         else:
             meta = get_video_metadata(tmp.name)
@@ -70,15 +87,16 @@ async def upload_media(file: UploadFile = File(...)):
                 INSERT INTO videos
                 (video_id, filename, volume_path, uf, store_id, video_date,
                  file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type)
+                 upload_timestamp, status, media_type, context_id)
                 VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO')
+                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO', %(ctx)s)
             """, {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
                 "size": len(content),
                 "dur": meta.get("duration_seconds", 0), "fps": meta.get("fps", 0),
                 "res": meta.get("resolution", ""), "tf": meta.get("total_frames", 0),
+                "ctx": context_id,
             })
 
         worker = ProcessingWorker()
@@ -88,6 +106,7 @@ async def upload_media(file: UploadFile = File(...)):
             "video_id": video_id, "filename": filename, "media_type": "PHOTO" if is_photo else "VIDEO",
             "uf": parsed["uf"], "store_id": parsed["store_id"],
             "video_date": str(parsed["video_date"]), "status": "PROCESSING",
+            "context_id": context_id,
         }
     finally:
         if os.path.exists(tmp.name):
@@ -98,6 +117,7 @@ async def upload_media(file: UploadFile = File(...)):
 async def list_videos(
     uf: str = Query(None), store_id: str = Query(None),
     status: str = Query(None), media_type: str = Query(None),
+    context_id: int = Query(None),
     limit: int = Query(50), offset: int = Query(0),
 ):
     conditions = []
@@ -115,6 +135,9 @@ async def list_videos(
     if media_type:
         conditions.append("COALESCE(v.media_type, 'VIDEO') = %(mt)s")
         params["mt"] = media_type.upper()
+    if context_id:
+        conditions.append("v.context_id = %(ctx)s")
+        params["ctx"] = context_id
 
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 

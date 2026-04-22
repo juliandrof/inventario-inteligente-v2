@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.get("/summary")
-async def summary(uf: Optional[str] = None, store_id: Optional[str] = None):
+async def summary(uf: Optional[str] = None, store_id: Optional[str] = None, context_id: Optional[int] = None):
     conds_v, conds_f, params = [], [], {}
     if uf:
         conds_v.append("v.uf = %(uf)s")
@@ -18,6 +18,10 @@ async def summary(uf: Optional[str] = None, store_id: Optional[str] = None):
         conds_v.append("v.store_id = %(sid)s")
         conds_f.append("f.store_id = %(sid)s")
         params["sid"] = store_id
+    if context_id:
+        conds_v.append("v.context_id = %(ctx)s")
+        conds_f.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
 
     wv = (" AND " + " AND ".join(conds_v)) if conds_v else ""
     wf = (" AND " + " AND ".join(conds_f)) if conds_f else ""
@@ -31,7 +35,7 @@ async def summary(uf: Optional[str] = None, store_id: Optional[str] = None):
     avg_occ = execute_query(f"SELECT COALESCE(AVG(f.occupancy_pct),0) as avg FROM fixtures f WHERE 1=1 {wf}", params)
     anomalies = execute_query(f"""
         SELECT COUNT(*) as cnt FROM anomalies a WHERE a.resolved = FALSE
-        {(' AND a.uf = %(uf)s' if uf else '') + (' AND a.store_id = %(sid)s' if store_id else '')}
+        {(' AND a.uf = %(uf)s' if uf else '') + (' AND a.store_id = %(sid)s' if store_id else '') + (' AND a.context_id = %(ctx)s' if context_id else '')}
     """, params)
 
     return {
@@ -47,7 +51,7 @@ async def summary(uf: Optional[str] = None, store_id: Optional[str] = None):
 
 
 @router.get("/by-type")
-async def fixtures_by_type(uf: Optional[str] = None, store_id: Optional[str] = None):
+async def fixtures_by_type(uf: Optional[str] = None, store_id: Optional[str] = None, context_id: Optional[int] = None):
     conds, params = [], {}
     if uf:
         conds.append("f.uf = %(uf)s")
@@ -55,6 +59,9 @@ async def fixtures_by_type(uf: Optional[str] = None, store_id: Optional[str] = N
     if store_id:
         conds.append("f.store_id = %(sid)s")
         params["sid"] = store_id
+    if context_id:
+        conds.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
     w = (" AND " + " AND ".join(conds)) if conds else ""
 
     return execute_query(f"""
@@ -69,20 +76,28 @@ async def fixtures_by_type(uf: Optional[str] = None, store_id: Optional[str] = N
 
 
 @router.get("/by-uf")
-async def fixtures_by_uf():
-    return execute_query("""
+async def fixtures_by_uf(context_id: Optional[int] = None):
+    conds, params = [], {}
+    if context_id:
+        conds.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
+    w = (" WHERE " + " AND ".join(conds)) if conds else ""
+    return execute_query(f"""
         SELECT f.uf, COUNT(*) as total, COUNT(DISTINCT f.store_id) as store_count,
             ROUND(AVG(f.occupancy_pct)::numeric, 1) as avg_occupancy
-        FROM fixtures f GROUP BY f.uf ORDER BY total DESC
-    """)
+        FROM fixtures f{w} GROUP BY f.uf ORDER BY total DESC
+    """, params)
 
 
 @router.get("/by-store")
-async def fixtures_by_store(uf: Optional[str] = None, limit: int = Query(20)):
+async def fixtures_by_store(uf: Optional[str] = None, context_id: Optional[int] = None, limit: int = Query(20)):
     conds, params = [], {"limit": limit}
     if uf:
         conds.append("f.uf = %(uf)s")
         params["uf"] = uf.upper()
+    if context_id:
+        conds.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
     w = (" AND " + " AND ".join(conds)) if conds else ""
 
     return execute_query(f"""
@@ -97,7 +112,7 @@ async def fixtures_by_store(uf: Optional[str] = None, limit: int = Query(20)):
 
 
 @router.get("/occupancy")
-async def occupancy_overview(uf: Optional[str] = None, store_id: Optional[str] = None):
+async def occupancy_overview(uf: Optional[str] = None, store_id: Optional[str] = None, context_id: Optional[int] = None):
     conds, params = [], {}
     if uf:
         conds.append("f.uf = %(uf)s")
@@ -105,6 +120,9 @@ async def occupancy_overview(uf: Optional[str] = None, store_id: Optional[str] =
     if store_id:
         conds.append("f.store_id = %(sid)s")
         params["sid"] = store_id
+    if context_id:
+        conds.append("f.context_id = %(ctx)s")
+        params["ctx"] = context_id
     w = (" AND " + " AND ".join(conds)) if conds else ""
 
     return execute_query(f"""
@@ -116,7 +134,7 @@ async def occupancy_overview(uf: Optional[str] = None, store_id: Optional[str] =
 
 
 @router.get("/anomalies")
-async def list_anomalies(uf: Optional[str] = None, store_id: Optional[str] = None, resolved: bool = False):
+async def list_anomalies(uf: Optional[str] = None, store_id: Optional[str] = None, context_id: Optional[int] = None, resolved: bool = False):
     conds, params = ["a.resolved = %(resolved)s"], {"resolved": resolved}
     if uf:
         conds.append("a.uf = %(uf)s")
@@ -124,6 +142,9 @@ async def list_anomalies(uf: Optional[str] = None, store_id: Optional[str] = Non
     if store_id:
         conds.append("a.store_id = %(sid)s")
         params["sid"] = store_id
+    if context_id:
+        conds.append("a.context_id = %(ctx)s")
+        params["ctx"] = context_id
 
     return execute_query(f"""
         SELECT a.*, s.name as store_name
@@ -134,18 +155,22 @@ async def list_anomalies(uf: Optional[str] = None, store_id: Optional[str] = Non
 
 
 @router.get("/temporal")
-async def temporal_comparison(store_id: str):
+async def temporal_comparison(store_id: str, context_id: Optional[int] = None):
     """Compare fixture counts across different video dates for a store."""
-    return execute_query("""
+    conds, params = ["fs.store_id = %(sid)s"], {"sid": store_id}
+    if context_id:
+        conds.append("fs.context_id = %(ctx)s")
+        params["ctx"] = context_id
+    return execute_query(f"""
         SELECT fs.video_date, fs.fixture_type, fs.total_count, fs.avg_occupancy_pct
         FROM fixture_summary fs
-        WHERE fs.store_id = %(sid)s
+        WHERE {' AND '.join(conds)}
         ORDER BY fs.video_date, fs.fixture_type
-    """, {"sid": store_id})
+    """, params)
 
 
 @router.get("/recent")
-async def recent_videos(uf: Optional[str] = None, store_id: Optional[str] = None):
+async def recent_videos(uf: Optional[str] = None, store_id: Optional[str] = None, context_id: Optional[int] = None):
     conds, params = [], {}
     if uf:
         conds.append("v.uf = %(uf)s")
@@ -153,6 +178,9 @@ async def recent_videos(uf: Optional[str] = None, store_id: Optional[str] = None
     if store_id:
         conds.append("v.store_id = %(sid)s")
         params["sid"] = store_id
+    if context_id:
+        conds.append("v.context_id = %(ctx)s")
+        params["ctx"] = context_id
     w = (" AND " + " AND ".join(conds)) if conds else ""
 
     return execute_query(f"""
@@ -167,13 +195,19 @@ async def recent_videos(uf: Optional[str] = None, store_id: Optional[str] = None
 
 
 @router.get("/filters")
-async def get_filters():
+async def get_filters(context_id: Optional[int] = None):
     """Get available UFs and stores for filter dropdowns."""
-    ufs = execute_query("SELECT DISTINCT uf FROM videos ORDER BY uf")
-    stores = execute_query("""
+    ctx_cond = ""
+    params = {}
+    if context_id:
+        ctx_cond = " WHERE v.context_id = %(ctx)s"
+        params["ctx"] = context_id
+    ufs = execute_query(f"SELECT DISTINCT uf FROM videos v{ctx_cond} ORDER BY uf", params)
+    stores = execute_query(f"""
         SELECT DISTINCT v.store_id, v.uf, s.name
         FROM videos v LEFT JOIN stores s ON v.store_id = s.store_id
+        {ctx_cond}
         ORDER BY v.uf, v.store_id
-    """)
+    """, params)
     fixture_types = execute_query("SELECT name, display_name, color FROM fixture_types ORDER BY name")
     return {"ufs": [r["uf"] for r in ufs], "stores": stores, "fixture_types": fixture_types}

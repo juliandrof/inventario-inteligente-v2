@@ -24,24 +24,34 @@ THUMBNAIL_VOLUME = os.environ.get("THUMBNAIL_VOLUME", "/Volumes/scenic_crawler/d
 VIDEO_VOLUME = os.environ.get("VIDEO_VOLUME", "/Volumes/scenic_crawler/default/uploaded_videos")
 
 
-def _get_detection_function():
+def _get_detection_function(context_id: int = None):
     """Return the appropriate detection function based on the configured detection_mode.
 
-    Reads the 'detection_mode' config key and returns:
-    - analyze_frame_fixtures  for 'LLM' (default)
-    - detect_fixtures_yolo    for 'YOLO'
-    - detect_fixtures_hybrid  for 'HYBRID'
+    Reads the 'detection_mode' config key and returns a callable that accepts frame_b64.
+    When context_id is provided, wraps LLM detection to pass it through.
     """
     from server.yolo_detector import detect_fixtures_yolo, detect_fixtures_hybrid
     mode = get_config("detection_mode", "LLM").upper().strip()
     if mode == "YOLO":
         logger.info("Detection mode: YOLO")
+        if context_id:
+            def _yolo_with_context(frame_b64):
+                return detect_fixtures_yolo(frame_b64, context_id=context_id)
+            return _yolo_with_context
         return detect_fixtures_yolo
     elif mode == "HYBRID":
         logger.info("Detection mode: HYBRID (YOLO + LLM)")
+        if context_id:
+            def _hybrid_with_context(frame_b64):
+                return detect_fixtures_hybrid(frame_b64, context_id=context_id)
+            return _hybrid_with_context
         return detect_fixtures_hybrid
     else:
         logger.info("Detection mode: LLM")
+        if context_id:
+            def _llm_with_context(frame_b64):
+                return analyze_frame_fixtures(frame_b64, context_id=context_id)
+            return _llm_with_context
         return analyze_frame_fixtures
 
 
@@ -146,7 +156,11 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
     confidence_threshold = float(get_config("confidence_threshold", "0.6"))
     dedup_threshold = float(get_config("dedup_position_threshold", "15"))
 
-    detect_fn = _get_detection_function()
+    # Read video's context_id for context-aware detection
+    video_ctx = execute_query("SELECT context_id FROM videos WHERE video_id = %(vid)s", {"vid": video_id})
+    context_id = video_ctx[0]["context_id"] if video_ctx and video_ctx[0].get("context_id") else None
+
+    detect_fn = _get_detection_function(context_id)
 
     logger.info(f"[V{video_id}] Starting fixture detection: {local_path}")
     logger.info(f"[V{video_id}] Config: scan_fps={scan_fps}, confidence={confidence_threshold}, dedup={dedup_threshold}")
@@ -274,13 +288,13 @@ def process_video(video_id: int, local_path: str, progress_callback=None):
     _save_detections(all_detections)
 
     # Persist fixtures
-    _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video_date)
+    _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video_date, context_id)
 
     # Generate summary
-    _generate_summary(video_id, unique_fixtures, store_id, uf, video_date)
+    _generate_summary(video_id, unique_fixtures, store_id, uf, video_date, context_id)
 
     # Detect anomalies
-    _detect_anomalies(video_id, unique_fixtures, store_id, uf)
+    _detect_anomalies(video_id, unique_fixtures, store_id, uf, context_id)
 
     # Update processing log
     processing_time = time.time() - start_time
@@ -327,7 +341,7 @@ def _save_detections(all_detections):
         })
 
 
-def _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video_date):
+def _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video_date, context_id=None):
     for tf in unique_fixtures:
         fixture_id = int(time.time() * 1000000) + tf.tracking_id
         thumb = thumbnail_map.get(tf.tracking_id, "")
@@ -335,10 +349,10 @@ def _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video
             INSERT INTO fixtures
             (fixture_id, video_id, store_id, uf, video_date, fixture_type, tracking_id,
              first_seen_sec, last_seen_sec, frame_count, avg_confidence,
-             best_thumbnail_path, occupancy_level, occupancy_pct, ai_description, position_zone)
+             best_thumbnail_path, occupancy_level, occupancy_pct, ai_description, position_zone, context_id)
             VALUES (%(fid)s, %(vid)s, %(sid)s, %(uf)s, %(vd)s, %(ft)s, %(tid)s,
                     %(first)s, %(last)s, %(fc)s, %(conf)s,
-                    %(thumb)s, %(occ)s, %(occ_pct)s, %(desc)s, %(zone)s)
+                    %(thumb)s, %(occ)s, %(occ_pct)s, %(desc)s, %(zone)s, %(ctx)s)
         """, {
             "fid": fixture_id, "vid": video_id, "sid": store_id, "uf": uf,
             "vd": video_date, "ft": tf.fixture_type, "tid": tf.tracking_id,
@@ -346,11 +360,11 @@ def _save_fixtures(video_id, unique_fixtures, thumbnail_map, store_id, uf, video
             "fc": tf.frame_count, "conf": tf.avg_confidence,
             "thumb": thumb, "occ": tf.dominant_occupancy,
             "occ_pct": tf.avg_occupancy_pct, "desc": tf.best_description,
-            "zone": tf.zone,
+            "zone": tf.zone, "ctx": context_id,
         })
 
 
-def _generate_summary(video_id, unique_fixtures, store_id, uf, video_date):
+def _generate_summary(video_id, unique_fixtures, store_id, uf, video_date, context_id=None):
     """Generate fixture_summary aggregation by type."""
     # Delete old summary for this video
     execute_update("DELETE FROM fixture_summary WHERE video_id = %(vid)s", {"vid": video_id})
@@ -375,17 +389,18 @@ def _generate_summary(video_id, unique_fixtures, store_id, uf, video_date):
         execute_update("""
             INSERT INTO fixture_summary
             (summary_id, video_id, store_id, uf, video_date, fixture_type,
-             total_count, avg_occupancy_pct, empty_count, partial_count, full_count)
+             total_count, avg_occupancy_pct, empty_count, partial_count, full_count, context_id)
             VALUES (%(sid)s, %(vid)s, %(store)s, %(uf)s, %(vd)s, %(ft)s,
-                    %(count)s, %(avg_occ)s, %(empty)s, %(partial)s, %(full)s)
+                    %(count)s, %(avg_occ)s, %(empty)s, %(partial)s, %(full)s, %(ctx)s)
         """, {
             "sid": summary_id, "vid": video_id, "store": store_id, "uf": uf,
             "vd": video_date, "ft": ftype, "count": len(fixtures),
             "avg_occ": avg_occ, "empty": empty, "partial": partial, "full": full,
+            "ctx": context_id,
         })
 
 
-def _detect_anomalies(video_id, unique_fixtures, store_id, uf):
+def _detect_anomalies(video_id, unique_fixtures, store_id, uf, context_id=None):
     """Detect anomalies by comparing store fixture counts to UF averages."""
     try:
         anomaly_threshold = float(get_config("anomaly_std_threshold", "1.5"))
@@ -419,13 +434,14 @@ def _detect_anomalies(video_id, unique_fixtures, store_id, uf):
                     severity = "HIGH" if abs(count - avg) > 2 * std else "MEDIUM"
                     anomaly_id = int(time.time() * 1000000) + hash(ftype) % 10000
                     execute_update("""
-                        INSERT INTO anomalies (anomaly_id, store_id, uf, video_id, anomaly_type, severity, message, details)
-                        VALUES (%(aid)s, %(sid)s, %(uf)s, %(vid)s, 'FIXTURE_COUNT', %(sev)s, %(msg)s, %(det)s)
+                        INSERT INTO anomalies (anomaly_id, store_id, uf, video_id, anomaly_type, severity, message, details, context_id)
+                        VALUES (%(aid)s, %(sid)s, %(uf)s, %(vid)s, 'FIXTURE_COUNT', %(sev)s, %(msg)s, %(det)s, %(ctx)s)
                     """, {
                         "aid": anomaly_id, "sid": store_id, "uf": uf, "vid": video_id,
                         "sev": severity,
                         "msg": f"Loja {store_id} tem {count} {ftype}(s), significativamente {direction} da media da UF ({avg:.1f})",
                         "det": json.dumps({"fixture_type": ftype, "count": count, "uf_avg": avg, "uf_std": std}),
+                        "ctx": context_id,
                     })
 
         # Check low occupancy anomaly
@@ -433,12 +449,13 @@ def _detect_anomalies(video_id, unique_fixtures, store_id, uf):
         if total_occupancy < 30 and len(unique_fixtures) > 0:
             anomaly_id = int(time.time() * 1000000) + 99999
             execute_update("""
-                INSERT INTO anomalies (anomaly_id, store_id, uf, video_id, anomaly_type, severity, message, details)
-                VALUES (%(aid)s, %(sid)s, %(uf)s, %(vid)s, 'LOW_OCCUPANCY', 'HIGH', %(msg)s, %(det)s)
+                INSERT INTO anomalies (anomaly_id, store_id, uf, video_id, anomaly_type, severity, message, details, context_id)
+                VALUES (%(aid)s, %(sid)s, %(uf)s, %(vid)s, 'LOW_OCCUPANCY', 'HIGH', %(msg)s, %(det)s, %(ctx)s)
             """, {
                 "aid": anomaly_id, "sid": store_id, "uf": uf, "vid": video_id,
                 "msg": f"Loja {store_id} com ocupacao media de {total_occupancy:.0f}% - possivel necessidade de reabastecimento",
                 "det": json.dumps({"avg_occupancy_pct": total_occupancy}),
+                "ctx": context_id,
             })
 
     except Exception as e:
@@ -452,7 +469,11 @@ def process_photo(video_id: int, local_path: str, progress_callback=None):
 
     confidence_threshold = float(get_config("confidence_threshold", "0.6"))
 
-    detect_fn = _get_detection_function()
+    # Read video's context_id for context-aware detection
+    video_ctx = execute_query("SELECT context_id FROM videos WHERE video_id = %(vid)s", {"vid": video_id})
+    context_id = video_ctx[0]["context_id"] if video_ctx and video_ctx[0].get("context_id") else None
+
+    detect_fn = _get_detection_function(context_id)
 
     logger.info(f"[P{video_id}] Starting photo analysis: {local_path}")
 
@@ -536,15 +557,15 @@ def process_photo(video_id: int, local_path: str, progress_callback=None):
             INSERT INTO fixtures
             (fixture_id, video_id, store_id, uf, video_date, fixture_type, tracking_id,
              first_seen_sec, last_seen_sec, frame_count, avg_confidence,
-             best_thumbnail_path, occupancy_level, occupancy_pct, ai_description, position_zone)
+             best_thumbnail_path, occupancy_level, occupancy_pct, ai_description, position_zone, context_id)
             VALUES (%(fid)s, %(vid)s, %(sid)s, %(uf)s, %(vd)s, %(ft)s, %(tid)s,
-                    0, 0, 1, %(conf)s, %(thumb)s, %(occ)s, %(occ_pct)s, %(desc)s, %(zone)s)
+                    0, 0, 1, %(conf)s, %(thumb)s, %(occ)s, %(occ_pct)s, %(desc)s, %(zone)s, %(ctx)s)
         """, {
             "fid": fixture_id, "vid": video_id, "sid": store_id, "uf": uf,
             "vd": video_date, "ft": det["fixture_type"], "tid": det["tracking_id"],
             "conf": det["confidence"], "thumb": thumb,
             "occ": det["occupancy_level"], "occ_pct": det["occupancy_pct"],
-            "desc": det["ai_description"], "zone": "",
+            "desc": det["ai_description"], "zone": "", "ctx": context_id,
         })
 
     # Build tracker-compatible list for summary/anomaly
@@ -555,8 +576,8 @@ def process_photo(video_id: int, local_path: str, progress_callback=None):
             self.dominant_occupancy = d["occupancy_level"]
 
     fake_tracks = [_FakeTrack(d) for d in all_detections]
-    _generate_summary(video_id, fake_tracks, store_id, uf, video_date)
-    _detect_anomalies(video_id, fake_tracks, store_id, uf)
+    _generate_summary(video_id, fake_tracks, store_id, uf, video_date, context_id)
+    _detect_anomalies(video_id, fake_tracks, store_id, uf, context_id)
 
     processing_time = time.time() - start_time
     execute_update("""
