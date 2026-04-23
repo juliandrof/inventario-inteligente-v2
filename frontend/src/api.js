@@ -20,11 +20,6 @@ function qs(params) {
 // Dashboard
 export const fetchDashboardSummary = (f = {}) => request('/dashboard/summary' + qs(f));
 export const fetchDashboardByType = (f = {}) => request('/dashboard/by-type' + qs(f));
-export const fetchDashboardByUF = () => request('/dashboard/by-uf');
-export const fetchDashboardByStore = (f = {}) => request('/dashboard/by-store' + qs(f));
-export const fetchOccupancy = (f = {}) => request('/dashboard/occupancy' + qs(f));
-export const fetchAnomalies = (f = {}) => request('/dashboard/anomalies' + qs(f));
-export const fetchTemporal = (storeId) => request(`/dashboard/temporal?store_id=${storeId}`);
 export const fetchRecentVideos = (f = {}) => request('/dashboard/recent' + qs(f));
 export const fetchFilters = () => request('/dashboard/filters');
 
@@ -63,7 +58,6 @@ export const deleteFixtureType = (name) => request(`/config/fixture-types/${name
 
 // Reports
 export const fetchReportSummary = (f = {}) => request('/reports/summary' + qs(f));
-export const fetchComparison = (f = {}) => request('/reports/comparison' + qs(f));
 
 // Config
 export const fetchConfigs = () => request('/config');

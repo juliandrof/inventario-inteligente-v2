@@ -1,8 +1,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import Upload from './pages/VideoUpload';
-import VideoList from './pages/VideoList';
-import PhotoList from './pages/PhotoList';
+import Processing from './pages/Processing';
 import FixtureView from './pages/FixtureView';
 import Reports from './pages/Reports';
 import Review from './pages/Review';
@@ -13,8 +12,7 @@ import { fetchBranding } from './api';
 const PAGE_KEYS = [
   { key: 'dashboard', label: 'Dashboard', icon: 'chart' },
   { key: 'upload', label: 'Upload', icon: 'upload' },
-  { key: 'videos', label: 'Videos', icon: 'list' },
-  { key: 'photos', label: 'Fotos', icon: 'photo' },
+  { key: 'processing', label: 'Processamento', icon: 'list' },
   { key: 'fixtures', label: 'Deteccoes', icon: 'fixture' },
   { key: 'review', label: 'Revisao IA', icon: 'review' },
   { key: 'training', label: 'Treinamento IA', icon: 'training' },
@@ -23,7 +21,7 @@ const PAGE_KEYS = [
 ];
 
 const PAGE_COMPONENTS = {
-  dashboard: Dashboard, upload: Upload, videos: VideoList, photos: PhotoList,
+  dashboard: Dashboard, upload: Upload, processing: Processing,
   fixtures: FixtureView, review: Review, training: Training, reports: Reports, settings: Settings,
 };
 
@@ -31,7 +29,6 @@ const ICONS = {
   chart: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="10" width="3" height="8" rx="1" fill="currentColor"/><rect x="7" y="6" width="3" height="12" rx="1" fill="currentColor"/><rect x="12" y="3" width="3" height="15" rx="1" fill="currentColor"/></svg>,
   upload: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3v10M10 3l-4 4M10 3l4 4M3 14v2a1 1 0 001 1h12a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
   list: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="3" width="16" height="3" rx="1" fill="currentColor" opacity="0.8"/><rect x="2" y="8.5" width="16" height="3" rx="1" fill="currentColor" opacity="0.6"/><rect x="2" y="14" width="16" height="3" rx="1" fill="currentColor" opacity="0.4"/></svg>,
-  photo: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="3" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/><circle cx="7" cy="8" r="2" fill="currentColor"/><path d="M2 14l4-4 3 3 4-5 5 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>,
   fixture: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="2" rx="0.5" fill="currentColor"/><rect x="2" y="9" width="16" height="2" rx="0.5" fill="currentColor"/><rect x="2" y="14" width="16" height="2" rx="0.5" fill="currentColor"/><rect x="3" y="4" width="2" height="12" fill="currentColor" opacity="0.5"/><rect x="15" y="4" width="2" height="12" fill="currentColor" opacity="0.5"/></svg>,
   review: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2"/><path d="M14 14l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><path d="M7 9h4M9 7v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>,
   training: <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2 16l4-6 3 4 4-8 5 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="15" cy="5" r="3" stroke="currentColor" strokeWidth="1.5"/><path d="M15 3.5v3M13.5 5h3" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/></svg>,

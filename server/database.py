@@ -353,6 +353,7 @@ def _auto_create_tables(conn):
     # Ensure media_type column exists
     try:
         cur.execute("ALTER TABLE videos ADD COLUMN IF NOT EXISTS media_type VARCHAR(10) DEFAULT 'VIDEO'")
+        cur.execute("ALTER TABLE videos ADD COLUMN IF NOT EXISTS detection_model VARCHAR(200)")
     except Exception as e:
         logger.warning(f"ALTER media_type: {e}")
 

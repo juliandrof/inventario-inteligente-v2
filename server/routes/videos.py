@@ -53,6 +53,10 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
     except Exception as e:
         logger.warning(f"ensure_store_exists failed: {e}")
 
+    # Capture current detection model for this upload
+    from server.database import get_config
+    detection_model = get_config("fmapi_model", "") or ""
+
     is_photo = is_image_file(filename)
     ext = os.path.splitext(filename)[1].lower()
 
@@ -79,13 +83,13 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
                 INSERT INTO videos
                 (video_id, filename, volume_path, uf, store_id, video_date,
                  file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type, context_id)
+                 upload_timestamp, status, media_type, context_id, detection_model)
                 VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO', %(ctx)s)
+                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO', %(ctx)s, %(dm)s)
             """, {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
-                "size": len(content), "res": resolution, "ctx": context_id,
+                "size": len(content), "res": resolution, "ctx": context_id, "dm": detection_model,
             })
         else:
             meta = get_video_metadata(tmp.name)
@@ -93,16 +97,16 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
                 INSERT INTO videos
                 (video_id, filename, volume_path, uf, store_id, video_date,
                  file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type, context_id)
+                 upload_timestamp, status, media_type, context_id, detection_model)
                 VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO', %(ctx)s)
+                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO', %(ctx)s, %(dm)s)
             """, {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
                 "size": len(content),
                 "dur": meta.get("duration_seconds", 0), "fps": meta.get("fps", 0),
                 "res": meta.get("resolution", ""), "tf": meta.get("total_frames", 0),
-                "ctx": context_id,
+                "ctx": context_id, "dm": detection_model,
             })
 
         worker = ProcessingWorker()
@@ -126,26 +130,15 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
 
 @router.get("")
 async def list_videos(
-    uf: str = Query(None), store_id: str = Query(None),
-    status: str = Query(None), media_type: str = Query(None),
-    context_id: int = Query(None),
-    limit: int = Query(50), offset: int = Query(0),
+    status: str = Query(None), context_id: int = Query(None),
+    limit: int = Query(100), offset: int = Query(0),
 ):
     conditions = []
     params = {"limit": limit, "offset": offset}
 
-    if uf:
-        conditions.append("v.uf = %(uf)s")
-        params["uf"] = uf.upper()
-    if store_id:
-        conditions.append("v.store_id = %(sid)s")
-        params["sid"] = store_id
     if status:
         conditions.append("v.status = %(status)s")
         params["status"] = status.upper()
-    if media_type:
-        conditions.append("COALESCE(v.media_type, 'VIDEO') = %(mt)s")
-        params["mt"] = media_type.upper()
     if context_id:
         conditions.append("v.context_id = %(ctx)s")
         params["ctx"] = context_id
@@ -153,12 +146,12 @@ async def list_videos(
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     videos = execute_query(f"""
-        SELECT v.*, s.name as store_name,
+        SELECT v.*,
             (SELECT COUNT(*) FROM fixtures f WHERE f.video_id = v.video_id) as fixture_count,
             (SELECT jsonb_object_agg(sq.fixture_type, sq.cnt)
              FROM (SELECT fixture_type, COUNT(*) as cnt FROM fixtures WHERE video_id = v.video_id GROUP BY fixture_type) sq
             ) as type_counts
-        FROM videos v LEFT JOIN stores s ON v.store_id = s.store_id
+        FROM videos v
         {where} ORDER BY v.upload_timestamp DESC
         LIMIT %(limit)s OFFSET %(offset)s
     """, params)
@@ -250,6 +243,15 @@ async def reprocess_video(video_id: int):
     execute_update("DELETE FROM fixture_summary WHERE video_id = %(vid)s", {"vid": video_id})
     execute_update("DELETE FROM detections WHERE video_id = %(vid)s", {"vid": video_id})
     execute_update("DELETE FROM anomalies WHERE video_id = %(vid)s", {"vid": video_id})
+    # Restore the detection model that was used at upload time
+    stored_model = video[0].get("detection_model")
+    if stored_model:
+        from server.database import get_config
+        current_model = get_config("fmapi_model", "")
+        if stored_model != current_model:
+            from server.database import execute_update as _eu
+            _eu("UPDATE configurations SET config_value = %(v)s, updated_at = NOW() WHERE config_key = 'fmapi_model'", {"v": stored_model})
+
     execute_update("UPDATE videos SET status='PENDING', progress_pct=0, error_message=NULL WHERE video_id=%(vid)s", {"vid": video_id})
     worker = ProcessingWorker()
     worker.start_processing(video_id)
