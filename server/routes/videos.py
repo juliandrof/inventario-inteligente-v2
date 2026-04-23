@@ -83,7 +83,10 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
     if not context_id:
         context_id = _get_default_context_id()
 
-    _ensure_context_id_column()
+    try:
+        _ensure_context_id_column()
+    except Exception as e:
+        raise HTTPException(500, f"Erro na migracao do banco: {e}")
 
     try:
         ensure_store_exists(parsed["store_id"], parsed["uf"])
