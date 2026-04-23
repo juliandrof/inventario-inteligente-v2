@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { fetchVideos, fetchVideoFixtures, deleteVideo, reprocessVideo } from '../api';
-import { TYPE_COLORS, StatusBadge } from './Dashboard';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchVideos, fetchVideoFixtures, deleteVideo, reprocessVideo, fetchFilters } from '../api';
+import { TYPE_COLORS, updateTypeColors, StatusBadge } from './Dashboard';
 
 function Processing({ navigate }) {
   const [items, setItems] = useState([]);
@@ -10,6 +10,12 @@ function Processing({ navigate }) {
   const [expanded, setExpanded] = useState(null);
   const [fixtures, setFixtures] = useState({});
   const [deleting, setDeleting] = useState(null);
+  const [playingVideo, setPlayingVideo] = useState(null);
+
+  // Load fixture type colors
+  useEffect(() => {
+    fetchFilters().then(f => { if (f.fixture_types) updateTypeColors(f.fixture_types); }).catch(() => {});
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -143,25 +149,57 @@ function Processing({ navigate }) {
                   </div>
                 )}
 
-                {/* Expanded: fixture details */}
+                {/* Expanded: video player + fixture details */}
                 {isExpanded && (
-                  <div style={{ padding: '8px 16px 12px', borderTop: '1px solid #F3F4F6' }}>
-                    {v.status === 'PROCESSING' || v.status === 'PENDING' ? (
-                      <div style={{ padding: 8, color: '#6B7280', fontSize: 13 }}>Processando...</div>
-                    ) : v.status === 'FAILED' ? (
-                      <div style={{ padding: 8, color: '#EF4444', fontSize: 13 }}>{v.error_message || 'Falha no processamento'}</div>
-                    ) : !flist || flist.length === 0 ? (
-                      <div className="empty-state" style={{ padding: 12 }}>Nenhum objeto detectado</div>
-                    ) : (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {flist.map(s => (
-                          <div key={s.fixture_type} style={{ background: '#F9FAFB', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>
-                            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: TYPE_COLORS[s.fixture_type] || '#666', marginRight: 6 }} />
-                            <strong>{s.fixture_type}</strong>: {s.total_count} unidades
+                  <div style={{ borderTop: '1px solid #F3F4F6' }}>
+                    {/* Video player */}
+                    {!isPhoto && v.status === 'COMPLETED' && (
+                      <div style={{ padding: '8px 16px' }}>
+                        {playingVideo === v.video_id ? (
+                          <div>
+                            <video
+                              src={`/api/videos/${v.video_id}/stream`}
+                              controls autoPlay
+                              style={{ width: '100%', maxHeight: 400, borderRadius: 8, background: '#000' }}
+                            />
+                            <button className="btn btn-sm" style={{ marginTop: 6 }}
+                              onClick={() => setPlayingVideo(null)}>Fechar player</button>
                           </div>
-                        ))}
+                        ) : (
+                          <button className="btn btn-sm btn-primary" onClick={() => setPlayingVideo(v.video_id)}>
+                            Assistir video
+                          </button>
+                        )}
                       </div>
                     )}
+
+                    {/* Photo preview */}
+                    {isPhoto && v.status === 'COMPLETED' && v.thumbnail_path && (
+                      <div style={{ padding: '8px 16px' }}>
+                        <img src={`/api/thumbnails/${v.video_id}`} alt={v.filename}
+                          style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }} />
+                      </div>
+                    )}
+
+                    {/* Fixture summary */}
+                    <div style={{ padding: '8px 16px 12px' }}>
+                      {v.status === 'PROCESSING' || v.status === 'PENDING' ? (
+                        <div style={{ padding: 8, color: '#6B7280', fontSize: 13 }}>Processando...</div>
+                      ) : v.status === 'FAILED' ? (
+                        <div style={{ padding: 8, color: '#EF4444', fontSize: 13 }}>{v.error_message || 'Falha no processamento'}</div>
+                      ) : !flist || flist.length === 0 ? (
+                        <div className="empty-state" style={{ padding: 12 }}>Nenhum objeto detectado</div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {flist.map(s => (
+                            <div key={s.fixture_type} style={{ background: '#F9FAFB', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>
+                              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: TYPE_COLORS[s.fixture_type] || '#666', marginRight: 6 }} />
+                              <strong>{s.fixture_type}</strong>: {s.total_count} unidades
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
