@@ -57,22 +57,34 @@ async def health():
 
 @app.post("/api/migrate")
 async def run_migration():
-    """Drop all tables and recreate from scratch."""
+    """Transfer ownership of all tables to current user, then drop and recreate."""
     from server.database import get_connection
     results = []
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        # Get all tables in public schema owned by anyone
-        cur.execute("""
-            SELECT tablename FROM pg_tables WHERE schemaname = 'public'
-            ORDER BY tablename
-        """)
-        tables = [r[0] for r in cur.fetchall()]
-        results.append(f"existing tables: {tables}")
+        cur.execute("SELECT current_user")
+        me = cur.fetchone()[0]
+        results.append(f"current_user: {me}")
 
-        # Drop ALL tables with CASCADE (order doesn't matter with CASCADE)
+        # Find all distinct owners
+        cur.execute("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'public'")
+        owners = [r[0] for r in cur.fetchall()]
+        results.append(f"table owners: {owners}")
+
+        # Reassign ownership from old owners to current user
+        for old_owner in owners:
+            if old_owner != me:
+                try:
+                    cur.execute(f'REASSIGN OWNED BY "{old_owner}" TO "{me}"')
+                    results.append(f"reassigned from {old_owner} to {me}")
+                except Exception as e:
+                    results.append(f"reassign from {old_owner} failed: {e}")
+
+        # Now drop all tables
+        cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")
+        tables = [r[0] for r in cur.fetchall()]
         for t in tables:
             try:
                 cur.execute(f'DROP TABLE IF EXISTS "{t}" CASCADE')
@@ -81,9 +93,8 @@ async def run_migration():
                 results.append(f"drop {t} failed: {e}")
 
         cur.close()
-        results.append("all tables dropped")
 
-        # Now reinit - this will recreate everything with correct schema + ownership
+        # Recreate all tables
         from server.database import _auto_create_tables, _create_training_tables
         conn2 = get_connection()
         _auto_create_tables(conn2)
@@ -91,7 +102,7 @@ async def run_migration():
         _create_training_tables(conn2)
         results.append("training tables recreated")
 
-        # Verify context_id
+        # Verify
         cur2 = conn2.cursor()
         cur2.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'videos' ORDER BY ordinal_position")
         cols = [r[0] for r in cur2.fetchall()]
