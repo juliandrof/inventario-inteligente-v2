@@ -154,7 +154,6 @@ function VideoList({ navigate, pageParams }) {
                             <div>{s.total_count} unidades</div>
                             <div className="fixture-occ">
                               Occ: {Math.round(s.avg_occupancy_pct || 0)}%
-                              <small> (V:{s.empty_count} P:{s.partial_count} C:{s.full_count})</small>
                             </div>
                           </div>
                         </div>

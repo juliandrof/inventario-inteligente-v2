@@ -24,8 +24,7 @@ async def report_summary(uf: Optional[str] = None, store_id: Optional[str] = Non
 
     return execute_query(f"""
         SELECT fs.store_id, fs.uf, s.name as store_name, fs.video_date,
-            fs.fixture_type, fs.total_count, fs.avg_occupancy_pct,
-            fs.empty_count, fs.partial_count, fs.full_count
+            fs.fixture_type, fs.total_count, fs.avg_occupancy_pct
         FROM fixture_summary fs
         LEFT JOIN stores s ON fs.store_id = s.store_id
         WHERE 1=1 {w}
@@ -93,8 +92,7 @@ async def export_json(uf: Optional[str] = None, store_id: Optional[str] = None):
 
     rows = execute_query(f"""
         SELECT fs.store_id, fs.uf, s.name as store_name, fs.video_date,
-            fs.fixture_type, fs.total_count, fs.avg_occupancy_pct,
-            fs.empty_count, fs.partial_count, fs.full_count
+            fs.fixture_type, fs.total_count, fs.avg_occupancy_pct
         FROM fixture_summary fs
         LEFT JOIN stores s ON fs.store_id = s.store_id
         WHERE 1=1 {w}

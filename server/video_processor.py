@@ -381,22 +381,17 @@ def _generate_summary(video_id, unique_fixtures, store_id, uf, video_date, conte
         fixtures = data["fixtures"]
         occ_pcts = data["occupancy_pcts"]
         avg_occ = sum(occ_pcts) / len(occ_pcts) if occ_pcts else 0
-        empty = sum(1 for tf in fixtures if tf.dominant_occupancy == "VAZIO")
-        partial = sum(1 for tf in fixtures if tf.dominant_occupancy == "PARCIAL")
-        full = sum(1 for tf in fixtures if tf.dominant_occupancy == "CHEIO")
-
         summary_id = int(time.time() * 1000000) + hash(ftype) % 10000
         execute_update("""
             INSERT INTO fixture_summary
             (summary_id, video_id, store_id, uf, video_date, fixture_type,
-             total_count, avg_occupancy_pct, empty_count, partial_count, full_count, context_id)
+             total_count, avg_occupancy_pct, context_id)
             VALUES (%(sid)s, %(vid)s, %(store)s, %(uf)s, %(vd)s, %(ft)s,
-                    %(count)s, %(avg_occ)s, %(empty)s, %(partial)s, %(full)s, %(ctx)s)
+                    %(count)s, %(avg_occ)s, %(ctx)s)
         """, {
             "sid": summary_id, "vid": video_id, "store": store_id, "uf": uf,
             "vd": video_date, "ft": ftype, "count": len(fixtures),
-            "avg_occ": avg_occ, "empty": empty, "partial": partial, "full": full,
-            "ctx": context_id,
+            "avg_occ": avg_occ, "ctx": context_id,
         })
 
 

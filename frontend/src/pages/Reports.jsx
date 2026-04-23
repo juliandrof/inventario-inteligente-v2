@@ -66,7 +66,7 @@ function Reports() {
           <h3>Resumo de Deteccoes</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Tipo</th><th>Data</th><th>Qtd</th><th>Ocupacao</th><th>Vazio</th><th>Parcial</th><th>Cheio</th></tr>
+              <tr><th>Tipo</th><th>Data</th><th>Qtd</th><th>Ocupacao</th></tr>
             </thead>
             <tbody>
               {filteredSummary.map((r, i) => (
@@ -75,9 +75,6 @@ function Reports() {
                   <td>{r.video_date || '-'}</td>
                   <td><strong>{r.total_count}</strong></td>
                   <td><OccupancyBar pct={Math.round(r.avg_occupancy_pct || 0)} /></td>
-                  <td>{r.empty_count}</td>
-                  <td>{r.partial_count}</td>
-                  <td>{r.full_count}</td>
                 </tr>
               ))}
             </tbody>

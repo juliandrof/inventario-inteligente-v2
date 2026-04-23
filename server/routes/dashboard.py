@@ -66,10 +66,7 @@ async def fixtures_by_type(uf: Optional[str] = None, store_id: Optional[str] = N
 
     return execute_query(f"""
         SELECT f.fixture_type, COUNT(*) as total,
-            ROUND(AVG(f.occupancy_pct)::numeric, 1) as avg_occupancy,
-            SUM(CASE WHEN f.occupancy_level='VAZIO' THEN 1 ELSE 0 END) as empty_count,
-            SUM(CASE WHEN f.occupancy_level='PARCIAL' THEN 1 ELSE 0 END) as partial_count,
-            SUM(CASE WHEN f.occupancy_level='CHEIO' THEN 1 ELSE 0 END) as full_count
+            ROUND(AVG(f.occupancy_pct)::numeric, 1) as avg_occupancy
         FROM fixtures f WHERE 1=1 {w}
         GROUP BY f.fixture_type ORDER BY total DESC
     """, params)
