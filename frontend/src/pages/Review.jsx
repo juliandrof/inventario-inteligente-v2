@@ -3,28 +3,23 @@ import { fetchReviewVideos, fetchReviewFixtures, fetchFixtureFrames, fetchFilter
 import { TYPE_COLORS, updateTypeColors } from './Dashboard';
 
 function Review({ pageParams }) {
-  const [filters, setFilters] = useState({ ufs: [], stores: [] });
-  const [selUF, setSelUF] = useState(pageParams?.uf || '');
-  const [selStore, setSelStore] = useState(pageParams?.store_id || '');
   const [selDate, setSelDate] = useState('');
   const [videos, setVideos] = useState([]);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [reviewData, setReviewData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [filterType, setFilterType] = useState('');
-  const [frameModal, setFrameModal] = useState(null); // { videoId, trackingId, fixture }
+  const [frameModal, setFrameModal] = useState(null);
   const [frameData, setFrameData] = useState(null);
   const [loadingFrames, setLoadingFrames] = useState(false);
 
-  useEffect(() => { fetchFilters().then(f => { setFilters(f); updateTypeColors(f.fixture_types); }).catch(() => {}); }, []);
+  useEffect(() => { fetchFilters().then(f => { updateTypeColors(f.fixture_types); }).catch(() => {}); }, []);
 
   useEffect(() => {
     const f = {};
-    if (selUF) f.uf = selUF;
-    if (selStore) f.store_id = selStore;
     if (selDate) f.video_date = selDate;
     fetchReviewVideos(f).then(setVideos).catch(() => {});
-  }, [selUF, selStore, selDate]);
+  }, [selDate]);
 
   async function loadReview(videoId) {
     setSelectedVideo(videoId);
@@ -65,17 +60,7 @@ function Review({ pageParams }) {
       {/* Filters */}
       <div className="card">
         <div className="review-filters">
-          <select className="filter-select" value={selUF} onChange={e => { setSelUF(e.target.value); setSelStore(''); }}>
-            <option value="">Todas UFs</option>
-            {filters.ufs.map(u => <option key={u} value={u}>{u}</option>)}
-          </select>
-          <select className="filter-select" value={selStore} onChange={e => setSelStore(e.target.value)}>
-            <option value="">Todas Lojas</option>
-            {filters.stores.filter(s => !selUF || s.uf === selUF).map(s => (
-              <option key={s.store_id} value={s.store_id}>{s.store_id}{s.name ? ` - ${s.name}` : ''}</option>
-            ))}
-          </select>
-          <input type="date" className="filter-select" value={selDate} onChange={e => setSelDate(e.target.value)} />
+          <input type="date" className="filter-select" value={selDate} onChange={e => setSelDate(e.target.value)} placeholder="Filtrar por data" />
         </div>
       </div>
 
@@ -85,14 +70,12 @@ function Review({ pageParams }) {
           <h3>Selecione um video para revisar</h3>
           <table className="data-table">
             <thead>
-              <tr><th>Arquivo</th><th>Loja</th><th>UF</th><th>Data</th><th>Frames</th><th>Deteccoes</th><th>Objetos</th><th></th></tr>
+              <tr><th>Arquivo</th><th>Data</th><th>Frames</th><th>Deteccoes</th><th>Objetos</th><th></th></tr>
             </thead>
             <tbody>
               {videos.map(v => (
                 <tr key={v.video_id} className="clickable" onClick={() => loadReview(v.video_id)}>
                   <td className="filename">{v.filename}</td>
-                  <td>{v.store_id}{v.store_name ? ` - ${v.store_name}` : ''}</td>
-                  <td><span className="uf-badge">{v.uf}</span></td>
                   <td>{v.video_date}</td>
                   <td>{v.frames_with_detections || 0}</td>
                   <td>{v.total_detections || 0}</td>
@@ -116,8 +99,6 @@ function Review({ pageParams }) {
               <div>
                 <h3>{reviewData.video.filename}</h3>
                 <div className="review-meta">
-                  <span className="uf-badge">{reviewData.video.uf}</span>
-                  <span>Loja {reviewData.video.store_id}</span>
                   <span>{reviewData.video.video_date}</span>
                   <span><strong>{reviewData.total_fixtures}</strong> objetos unicos</span>
                 </div>
