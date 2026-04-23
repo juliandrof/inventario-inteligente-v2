@@ -376,7 +376,7 @@ async def list_training_groups(context_id: int = Query(None)):
         SELECT COALESCE(source_group, filename) as source_name,
             COUNT(*) FILTER (WHERE annotation_count >= 0) as frame_count,
             SUM(COALESCE(annotation_count, 0)) FILTER (WHERE annotation_count >= 0) as total_annotations,
-            MIN(image_id) FILTER (WHERE annotation_count >= 0) as first_image_id,
+            MIN(image_id) FILTER (WHERE annotation_count >= 0 AND filename NOT LIKE '%%_original.%%') as first_image_id,
             MIN(uploaded_at) as uploaded_at,
             BOOL_OR(filename LIKE '%%_original.%%') as has_video,
             MAX(context_id) as context_id
@@ -393,7 +393,10 @@ async def list_training_groups(context_id: int = Query(None)):
     except Exception:
         pass
     for g in groups:
-        g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
+        if g.get("first_image_id"):
+            g["thumbnail_url"] = f"/api/training/images/{g['first_image_id']}/stream"
+        else:
+            g["thumbnail_url"] = ""
         if g.get("has_video"):
             g["video_url"] = f"/api/training/groups/{g['source_name']}/video"
         g["context_name"] = ctx_names.get(g.get("context_id"), "")
