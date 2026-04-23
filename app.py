@@ -57,45 +57,50 @@ async def health():
 
 @app.post("/api/migrate")
 async def run_migration():
-    """One-time migration to add context_id to videos table."""
-    from server.database import get_connection, execute_query, execute_update
+    """Drop all tables and recreate from scratch."""
+    from server.database import get_connection
     results = []
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT current_user")
-        current_user = cur.fetchone()[0]
-        results.append(f"current_user: {current_user}")
+        # Get all tables in public schema owned by anyone
+        cur.execute("""
+            SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+            ORDER BY tablename
+        """)
+        tables = [r[0] for r in cur.fetchall()]
+        results.append(f"existing tables: {tables}")
 
-        cur.execute("SELECT tableowner FROM pg_tables WHERE tablename = 'videos'")
-        owner = cur.fetchone()
-        results.append(f"videos owner: {owner}")
-
-        # Check columns
-        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'videos' ORDER BY ordinal_position")
-        cols = [r[0] for r in cur.fetchall()]
-        results.append(f"videos columns: {cols}")
-
-        if "context_id" not in cols:
+        # Drop ALL tables with CASCADE (order doesn't matter with CASCADE)
+        for t in tables:
             try:
-                cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
-                results.append("SUCCESS: added context_id")
+                cur.execute(f'DROP TABLE IF EXISTS "{t}" CASCADE')
+                results.append(f"dropped: {t}")
             except Exception as e:
-                results.append(f"ALTER failed: {e}")
-                # Try GRANT approach
-                try:
-                    cur.execute(f"GRANT ALL ON TABLE videos TO \"{current_user}\"")
-                    cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
-                    results.append("SUCCESS via GRANT: added context_id")
-                except Exception as e2:
-                    results.append(f"GRANT+ALTER failed: {e2}")
-        else:
-            results.append("context_id already exists")
+                results.append(f"drop {t} failed: {e}")
 
         cur.close()
+        results.append("all tables dropped")
+
+        # Now reinit - this will recreate everything with correct schema + ownership
+        from server.database import _auto_create_tables, _create_training_tables
+        conn2 = get_connection()
+        _auto_create_tables(conn2)
+        results.append("core tables recreated")
+        _create_training_tables(conn2)
+        results.append("training tables recreated")
+
+        # Verify context_id
+        cur2 = conn2.cursor()
+        cur2.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'videos' ORDER BY ordinal_position")
+        cols = [r[0] for r in cur2.fetchall()]
+        results.append(f"videos columns: {cols}")
+        cur2.close()
+
     except Exception as e:
-        results.append(f"ERROR: {e}")
+        import traceback
+        results.append(f"ERROR: {e}\n{traceback.format_exc()}")
     return {"results": results}
 
 

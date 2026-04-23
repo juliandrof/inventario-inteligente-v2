@@ -14,42 +14,6 @@ from server.background_worker import ProcessingWorker
 from PIL import Image as PILImage
 
 
-_context_id_ensured = False
-
-def _ensure_context_id_column():
-    """Ensure videos table has context_id column. Recreates table if ALTER fails (ownership issue)."""
-    global _context_id_ensured
-    if _context_id_ensured:
-        return
-
-    rows = execute_query(
-        "SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'context_id'"
-    )
-    if rows:
-        _context_id_ensured = True
-        return
-
-    # ALTER fails on Lakebase if current user isn't table owner.
-    # Try to take ownership first, then ALTER.
-    logger.info("context_id missing on videos — attempting to fix ownership and add column")
-    try:
-        # Get current DB user
-        user_rows = execute_query("SELECT current_user")
-        current_user = user_rows[0]["current_user"] if user_rows else None
-        if current_user:
-            for tbl in ["videos", "detections", "fixtures", "fixture_summary", "anomalies", "stores"]:
-                try:
-                    execute_update(f"ALTER TABLE {tbl} OWNER TO \"{current_user}\"")
-                    logger.info(f"Took ownership of {tbl}")
-                except Exception as e:
-                    logger.warning(f"Could not take ownership of {tbl}: {e}")
-
-        # Now try the ALTER again
-        execute_update("ALTER TABLE videos ADD COLUMN context_id BIGINT")
-        logger.info("Added context_id column to videos table")
-        _context_id_ensured = True
-    except Exception as e:
-        raise RuntimeError(f"Cannot add context_id to videos: {e}")
 
 
 def _get_default_context_id() -> int:
@@ -83,11 +47,6 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
     # Resolve context_id: use provided, or fall back to default
     if not context_id:
         context_id = _get_default_context_id()
-
-    try:
-        _ensure_context_id_column()
-    except Exception as e:
-        raise HTTPException(500, f"Erro na migracao do banco: {e}")
 
     try:
         ensure_store_exists(parsed["store_id"], parsed["uf"])
