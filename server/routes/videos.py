@@ -218,9 +218,12 @@ async def get_video_detections(video_id: int):
         })
         if sec not in seen_seconds:
             seen_seconds.add(sec)
+            thumb = r.get("thumbnail_path", "")
+            # thumbnail_path is a volume path or just a filename
+            thumb_name = thumb.split("/")[-1] if thumb else ""
             frames.append({
                 "timestamp_sec": sec,
-                "thumbnail_url": f"/api/thumbnails/{video_id}?t={sec}" if r.get("thumbnail_path") else None,
+                "thumbnail_url": f"/api/thumbnails/{thumb_name}" if thumb_name else None,
             })
 
     return {"by_second": by_second, "frames": frames, "total_detections": len(rows)}

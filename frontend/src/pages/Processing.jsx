@@ -252,7 +252,7 @@ function Processing({ navigate }) {
 }
 
 
-/* Video player with detection bounding boxes overlay */
+/* Video player with detection bounding boxes overlay - uses same CSS as Training VideoAnnotationPlayer */
 function DetectionVideoPlayer({ videoUrl, bySecond }) {
   const videoRef = useRef(null);
   const [currentAnns, setCurrentAnns] = useState([]);
@@ -283,44 +283,43 @@ function DetectionVideoPlayer({ videoUrl, bySecond }) {
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
   return (
-    <div>
-      <div style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', background: '#000', cursor: 'pointer' }} onClick={togglePlay}>
-        <video ref={videoRef} src={videoUrl} style={{ width: '100%', maxHeight: 420, display: 'block' }} playsInline />
-        {/* Detection overlay */}
-        <div style={{ position: 'absolute', inset: 0 }}>
-          {currentAnns.map((a, i) => (
-            <div key={i} style={{
-              position: 'absolute',
-              left: `${(a.x || 50) - (a.w || 20) / 2}%`,
-              top: `${(a.y || 50) - (a.h || 20) / 2}%`,
-              width: `${a.w || 20}%`,
-              height: `${a.h || 20}%`,
-              border: `2px solid ${a.color || TYPE_COLORS[a.fixture_type] || '#10B981'}`,
-              borderRadius: 3,
-            }}>
-              <span style={{
-                position: 'absolute', top: -16, left: 0,
-                background: a.color || TYPE_COLORS[a.fixture_type] || '#10B981',
-                color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 3,
-                whiteSpace: 'nowrap',
-              }}>{a.fixture_type}</span>
+    <div className="video-annotation-player">
+      <div className="video-ann-container">
+        {/* Uses same viewport/wrap/overlay structure as Training to keep boxes aligned */}
+        <div className="video-ann-viewport" onClick={togglePlay}>
+          <div className="video-ann-video-wrap">
+            <video ref={videoRef} src={videoUrl} className="video-ann-video" playsInline />
+            <div className="video-ann-overlay">
+              {currentAnns.map((a, i) => (
+                <div key={i} className="video-ann-box" style={{
+                  left: `${(a.x || 50) - (a.w || 20) / 2}%`,
+                  top: `${(a.y || 50) - (a.h || 20) / 2}%`,
+                  width: `${a.w || 20}%`,
+                  height: `${a.h || 20}%`,
+                  borderColor: a.color || TYPE_COLORS[a.fixture_type] || '#10B981',
+                }}>
+                  <span className="video-ann-label" style={{ background: a.color || TYPE_COLORS[a.fixture_type] || '#10B981' }}>
+                    {a.fixture_type}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        {!playing && (
-          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
+            {!playing && (
+              <div className="video-ann-play-overlay">
+                <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="30" fill="rgba(0,0,0,0.5)"/><path d="M24 18l18 12-18 12V18z" fill="white"/></svg>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      {/* Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-        <button className="btn btn-sm" onClick={togglePlay} style={{ padding: '2px 8px' }}>{playing ? '⏸' : '▶'}</button>
-        <div style={{ flex: 1, height: 6, background: '#E5E7EB', borderRadius: 3, cursor: 'pointer' }} onClick={seek}>
-          <div style={{ width: duration ? `${(currentTime / duration) * 100}%` : '0%', height: '100%', background: 'var(--app-primary)', borderRadius: 3 }} />
         </div>
-        <span style={{ fontSize: 12, color: '#6B7280' }}>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
-        <span style={{ fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '2px 6px', borderRadius: 4 }}>{currentAnns.length} det.</span>
+        {/* Controls bar */}
+        <div className="video-ann-controls">
+          <button className="video-ann-ctrl-btn" onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
+          <div className="video-ann-seekbar" onClick={seek}>
+            <div className="video-ann-seekbar-fill" style={{ width: duration ? `${(currentTime / duration) * 100}%` : '0%' }} />
+          </div>
+          <span className="video-ann-time">{fmtTime(currentTime)} / {fmtTime(duration)}</span>
+          <span className="video-ann-det-count">{currentAnns.length} det.</span>
+        </div>
       </div>
     </div>
   );
