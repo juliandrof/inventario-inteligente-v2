@@ -390,20 +390,23 @@ def _auto_create_tables(conn):
         except Exception as e:
             logger.warning(f"Auto-setup [{label}]: {e}")
 
-    # Add context_id column to existing tables (check existence first for compat)
+    # Add context_id column to existing tables
     context_id_tables = ['videos', 'fixtures', 'fixture_summary', 'anomalies',
                          'training_images', 'training_jobs', 'trained_models']
     for tbl in context_id_tables:
         try:
-            cur.execute("""
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = %s AND column_name = 'context_id'
-            """, (tbl,))
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = %s AND table_name = %s AND column_name = 'context_id'",
+                (DB_SCHEMA, tbl),
+            )
             if not cur.fetchone():
-                cur.execute(f"ALTER TABLE {tbl} ADD COLUMN context_id BIGINT")
+                cur.execute(f'ALTER TABLE "{tbl}" ADD COLUMN context_id BIGINT')
                 logger.info(f"Added context_id column to {tbl}")
+            else:
+                logger.info(f"context_id already exists on {tbl}")
         except Exception as e:
-            logger.warning(f"ALTER context_id on {tbl}: {e}")
+            logger.error(f"Failed to add context_id to {tbl}: {e}", exc_info=True)
 
     # Indexes
     indexes = [
