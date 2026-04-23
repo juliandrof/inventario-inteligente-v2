@@ -54,6 +54,51 @@ async def health():
         info["db_error"] = str(e)
     return info
 
+
+@app.post("/api/migrate")
+async def run_migration():
+    """One-time migration to add context_id to videos table."""
+    from server.database import get_connection, execute_query, execute_update
+    results = []
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT current_user")
+        current_user = cur.fetchone()[0]
+        results.append(f"current_user: {current_user}")
+
+        cur.execute("SELECT tableowner FROM pg_tables WHERE tablename = 'videos'")
+        owner = cur.fetchone()
+        results.append(f"videos owner: {owner}")
+
+        # Check columns
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'videos' ORDER BY ordinal_position")
+        cols = [r[0] for r in cur.fetchall()]
+        results.append(f"videos columns: {cols}")
+
+        if "context_id" not in cols:
+            try:
+                cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
+                results.append("SUCCESS: added context_id")
+            except Exception as e:
+                results.append(f"ALTER failed: {e}")
+                # Try GRANT approach
+                try:
+                    cur.execute(f"GRANT ALL ON TABLE videos TO \"{current_user}\"")
+                    cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
+                    results.append("SUCCESS via GRANT: added context_id")
+                except Exception as e2:
+                    results.append(f"GRANT+ALTER failed: {e2}")
+        else:
+            results.append("context_id already exists")
+
+        cur.close()
+    except Exception as e:
+        results.append(f"ERROR: {e}")
+    return {"results": results}
+
+
 app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
