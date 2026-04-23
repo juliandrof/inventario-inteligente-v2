@@ -37,7 +37,7 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
 
     try:
         parsed = parse_video_filename(filename)
-    except ValueError:
+    except (ValueError, Exception):
         # Best-effort defaults when filename doesn't match expected pattern
         from datetime import date
         parsed = {"uf": "XX", "store_id": "0000", "video_date": date.today()}
@@ -46,7 +46,11 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
     if not context_id:
         context_id = _get_default_context_id()
 
-    ensure_store_exists(parsed["store_id"], parsed["uf"])
+    try:
+        ensure_store_exists(parsed["store_id"], parsed["uf"])
+    except Exception as e:
+        logger.warning(f"ensure_store_exists failed: {e}")
+
     is_photo = is_image_file(filename)
     ext = os.path.splitext(filename)[1].lower()
 
@@ -108,6 +112,11 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
             "video_date": str(parsed["video_date"]), "status": "PROCESSING",
             "context_id": context_id,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Upload failed for {filename}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro no upload: {type(e).__name__}: {e}")
     finally:
         if os.path.exists(tmp.name):
             os.unlink(tmp.name)
