@@ -17,12 +17,11 @@ from PIL import Image as PILImage
 _context_id_ensured = False
 
 def _ensure_context_id_column():
-    """Ensure videos table has context_id column, add it if missing."""
+    """Ensure videos table has context_id column. Recreates table if ALTER fails (ownership issue)."""
     global _context_id_ensured
     if _context_id_ensured:
         return
 
-    # Check if column already exists
     rows = execute_query(
         "SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'context_id'"
     )
@@ -30,25 +29,106 @@ def _ensure_context_id_column():
         _context_id_ensured = True
         return
 
-    # Column missing — try multiple approaches to add it
-    approaches = [
-        "ALTER TABLE videos ADD COLUMN context_id BIGINT",
-        'ALTER TABLE "videos" ADD COLUMN "context_id" BIGINT',
-        "ALTER TABLE public.videos ADD COLUMN context_id BIGINT",
-    ]
-    last_err = None
-    for sql in approaches:
-        try:
-            execute_update(sql)
-            logger.info(f"Added context_id to videos via: {sql}")
-            _context_id_ensured = True
-            return
-        except Exception as e:
-            last_err = e
-            logger.warning(f"ALTER attempt failed ({sql}): {e}")
+    # ALTER fails on Lakebase if not table owner. Workaround: recreate table.
+    logger.info("context_id missing on videos — recreating table with column")
+    try:
+        # Save existing data
+        existing = execute_query("SELECT * FROM videos ORDER BY video_id")
 
-    # All attempts failed — raise so the user sees the real error
-    raise RuntimeError(f"Cannot add context_id column to videos table: {last_err}")
+        # Drop and recreate with context_id
+        execute_update("DROP TABLE IF EXISTS detections CASCADE")
+        execute_update("DROP TABLE IF EXISTS fixtures CASCADE")
+        execute_update("DROP TABLE IF EXISTS fixture_summary CASCADE")
+        execute_update("DROP TABLE IF EXISTS anomalies CASCADE")
+        execute_update("DROP TABLE IF EXISTS videos CASCADE")
+
+        execute_update("""
+            CREATE TABLE videos (
+                video_id BIGINT PRIMARY KEY, filename VARCHAR(500) NOT NULL,
+                volume_path VARCHAR(1000) NOT NULL, uf VARCHAR(2) NOT NULL,
+                store_id VARCHAR(20) NOT NULL,
+                video_date DATE NOT NULL, file_size_bytes BIGINT,
+                duration_seconds DOUBLE PRECISION, fps DOUBLE PRECISION,
+                resolution VARCHAR(50), total_frames INTEGER,
+                frames_analyzed INTEGER DEFAULT 0,
+                upload_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+                status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+                progress_pct DOUBLE PRECISION DEFAULT 0,
+                uploaded_by VARCHAR(200), error_message TEXT,
+                media_type VARCHAR(10) DEFAULT 'VIDEO',
+                context_id BIGINT
+            )
+        """)
+
+        # Recreate dependent tables
+        execute_update("""
+            CREATE TABLE IF NOT EXISTS detections (
+                detection_id BIGINT PRIMARY KEY, video_id BIGINT NOT NULL REFERENCES videos(video_id),
+                frame_index INTEGER NOT NULL, timestamp_sec DOUBLE PRECISION NOT NULL,
+                fixture_type VARCHAR(100) NOT NULL, confidence DOUBLE PRECISION,
+                bbox_x DOUBLE PRECISION, bbox_y DOUBLE PRECISION,
+                bbox_w DOUBLE PRECISION, bbox_h DOUBLE PRECISION,
+                tracking_id INTEGER, thumbnail_path VARCHAR(500),
+                ai_description TEXT, occupancy_level VARCHAR(20),
+                occupancy_pct DOUBLE PRECISION)
+        """)
+        execute_update("""
+            CREATE TABLE IF NOT EXISTS fixtures (
+                fixture_id BIGINT PRIMARY KEY, video_id BIGINT NOT NULL REFERENCES videos(video_id),
+                tracking_id INTEGER, fixture_type VARCHAR(100) NOT NULL,
+                first_seen_sec DOUBLE PRECISION, last_seen_sec DOUBLE PRECISION,
+                appearances INTEGER DEFAULT 1, avg_confidence DOUBLE PRECISION,
+                best_thumbnail_path VARCHAR(500), zone VARCHAR(50),
+                position_x DOUBLE PRECISION, position_y DOUBLE PRECISION,
+                occupancy_level VARCHAR(20), occupancy_pct DOUBLE PRECISION,
+                ai_description TEXT, context_id BIGINT)
+        """)
+        execute_update("""
+            CREATE TABLE IF NOT EXISTS fixture_summary (
+                summary_id BIGINT PRIMARY KEY, video_id BIGINT NOT NULL REFERENCES videos(video_id),
+                fixture_type VARCHAR(100) NOT NULL, total_count INTEGER DEFAULT 0,
+                avg_occupancy_pct DOUBLE PRECISION, empty_count INTEGER DEFAULT 0,
+                partial_count INTEGER DEFAULT 0, full_count INTEGER DEFAULT 0,
+                context_id BIGINT)
+        """)
+        execute_update("""
+            CREATE TABLE IF NOT EXISTS anomalies (
+                anomaly_id BIGINT PRIMARY KEY, video_id BIGINT NOT NULL REFERENCES videos(video_id),
+                anomaly_type VARCHAR(100), severity VARCHAR(20),
+                description TEXT, fixture_type VARCHAR(100),
+                metric_value DOUBLE PRECISION, threshold_value DOUBLE PRECISION,
+                context_id BIGINT)
+        """)
+
+        # Re-insert existing videos
+        for v in existing:
+            try:
+                execute_update("""
+                    INSERT INTO videos (video_id, filename, volume_path, uf, store_id, video_date,
+                        file_size_bytes, duration_seconds, fps, resolution, total_frames,
+                        frames_analyzed, upload_timestamp, status, progress_pct,
+                        uploaded_by, error_message, media_type, context_id)
+                    VALUES (%(vid)s, %(fn)s, %(vp)s, %(uf)s, %(sid)s, %(vd)s,
+                        %(fsb)s, %(dur)s, %(fps)s, %(res)s, %(tf)s,
+                        %(fa)s, %(ut)s, %(st)s, %(pp)s,
+                        %(ub)s, %(em)s, %(mt)s, %(ctx)s)
+                """, {
+                    "vid": v["video_id"], "fn": v["filename"], "vp": v["volume_path"],
+                    "uf": v["uf"], "sid": v["store_id"], "vd": v["video_date"],
+                    "fsb": v.get("file_size_bytes"), "dur": v.get("duration_seconds"),
+                    "fps": v.get("fps"), "res": v.get("resolution"), "tf": v.get("total_frames"),
+                    "fa": v.get("frames_analyzed", 0), "ut": v.get("upload_timestamp"),
+                    "st": v.get("status", "PENDING"), "pp": v.get("progress_pct", 0),
+                    "ub": v.get("uploaded_by"), "em": v.get("error_message"),
+                    "mt": v.get("media_type", "VIDEO"), "ctx": v.get("context_id"),
+                })
+            except Exception as e:
+                logger.warning(f"Could not re-insert video {v['video_id']}: {e}")
+
+        logger.info("Videos table recreated with context_id column")
+        _context_id_ensured = True
+    except Exception as e:
+        raise RuntimeError(f"Cannot add context_id to videos: {e}")
 
 
 def _get_default_context_id() -> int:
