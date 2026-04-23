@@ -183,6 +183,49 @@ async def get_video_fixtures(video_id: int):
     return {"fixtures": fixtures, "summary": summary}
 
 
+@router.get("/{video_id}/detections")
+async def get_video_detections(video_id: int):
+    """Get all raw detections grouped by frame timestamp (for frame grid + video overlay)."""
+    rows = execute_query("""
+        SELECT d.frame_index, d.timestamp_sec, d.fixture_type,
+            d.confidence, d.bbox_x, d.bbox_y, d.bbox_w, d.bbox_h,
+            d.thumbnail_path, d.ai_description,
+            ft.display_name, ft.color as type_color
+        FROM detections d
+        LEFT JOIN fixture_types ft ON d.fixture_type = ft.name
+        WHERE d.video_id = %(vid)s
+        ORDER BY d.timestamp_sec, d.fixture_type
+    """, {"vid": video_id})
+
+    # Group by timestamp (integer second)
+    by_second = {}
+    frames = []
+    seen_seconds = set()
+    for r in rows:
+        sec = int(r.get("timestamp_sec", 0))
+        if sec not in by_second:
+            by_second[sec] = []
+        by_second[sec].append({
+            "fixture_type": r["fixture_type"],
+            "display_name": r.get("display_name", r["fixture_type"]),
+            "color": r.get("type_color") or "#666",
+            "confidence": r.get("confidence", 0),
+            "x": r.get("bbox_x", 50),
+            "y": r.get("bbox_y", 50),
+            "w": r.get("bbox_w", 20),
+            "h": r.get("bbox_h", 20),
+            "description": r.get("ai_description", ""),
+        })
+        if sec not in seen_seconds:
+            seen_seconds.add(sec)
+            frames.append({
+                "timestamp_sec": sec,
+                "thumbnail_url": f"/api/thumbnails/{video_id}?t={sec}" if r.get("thumbnail_path") else None,
+            })
+
+    return {"by_second": by_second, "frames": frames, "total_detections": len(rows)}
+
+
 @router.get("/{video_id}/stream")
 async def stream_video(video_id: int, request: Request):
     rows = execute_query("SELECT volume_path, filename FROM videos WHERE video_id = %(vid)s", {"vid": video_id})

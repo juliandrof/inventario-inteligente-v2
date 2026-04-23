@@ -27,6 +27,7 @@ export const fetchFilters = () => request('/dashboard/filters');
 export const fetchVideos = (f = {}) => request('/videos' + qs(f));
 export const fetchVideo = (id) => request(`/videos/${id}`);
 export const fetchVideoFixtures = (id) => request(`/videos/${id}/fixtures`);
+export const fetchVideoDetections = (id) => request(`/videos/${id}/detections`);
 export const deleteVideo = (id) => request(`/videos/${id}`, { method: 'DELETE' });
 export const reprocessVideo = (id) => request(`/videos/reprocess/${id}`, { method: 'POST' });
 export const uploadVideo = async (file, contextId) => {
