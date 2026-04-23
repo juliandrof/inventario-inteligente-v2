@@ -14,8 +14,13 @@ from server.background_worker import ProcessingWorker
 from PIL import Image as PILImage
 
 
+_context_id_ensured = False
+
 def _ensure_context_id_column():
-    """Ensure videos table has context_id column, add it if missing."""
+    """Ensure videos table has context_id column, add it if missing. Called lazily on first upload."""
+    global _context_id_ensured
+    if _context_id_ensured:
+        return
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -26,12 +31,9 @@ def _ensure_context_id_column():
             cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
             logger.info("Added context_id column to videos table")
         cur.close()
+        _context_id_ensured = True
     except Exception as e:
         logger.warning(f"Could not ensure context_id on videos: {e}")
-
-
-# Run on module import
-_ensure_context_id_column()
 
 
 def _get_default_context_id() -> int:
@@ -65,6 +67,8 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
     # Resolve context_id: use provided, or fall back to default
     if not context_id:
         context_id = _get_default_context_id()
+
+    _ensure_context_id_column()
 
     try:
         ensure_store_exists(parsed["store_id"], parsed["uf"])
