@@ -8,10 +8,34 @@ import tempfile
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import Response
 
-from server.database import execute_query, execute_update, get_workspace_client
+from server.database import execute_query, execute_update, get_workspace_client, get_connection
 from server.video_processor import parse_video_filename, get_video_metadata, ensure_store_exists, is_image_file
 from server.background_worker import ProcessingWorker
 from PIL import Image as PILImage
+
+
+def _has_context_id_column():
+    """Check if videos table has context_id column, add it if missing."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'context_id'"
+        )
+        if cur.fetchone():
+            cur.close()
+            return True
+        # Try to add it
+        cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
+        cur.close()
+        logger.info("Added context_id column to videos table")
+        return True
+    except Exception as e:
+        logger.warning(f"videos.context_id not available: {e}")
+        return False
+
+
+_videos_has_context_id = None
 
 
 def _get_default_context_id() -> int:
@@ -70,38 +94,51 @@ async def upload_media(file: UploadFile = File(...), context_id: int = Form(None
 
         video_id = int(time.time() * 1000)
 
+        # Check context_id column availability (cached after first check)
+        global _videos_has_context_id
+        if _videos_has_context_id is None:
+            _videos_has_context_id = _has_context_id_column()
+
+        ctx_col = ", context_id" if _videos_has_context_id else ""
+        ctx_val = ", %(ctx)s" if _videos_has_context_id else ""
+
         if is_photo:
             img = PILImage.open(tmp.name)
             resolution = f"{img.width}x{img.height}"
-            execute_update("""
-                INSERT INTO videos
-                (video_id, filename, volume_path, uf, store_id, video_date,
-                 file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type, context_id)
-                VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO', %(ctx)s)
-            """, {
+            params = {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
-                "size": len(content), "res": resolution, "ctx": context_id,
-            })
-        else:
-            meta = get_video_metadata(tmp.name)
-            execute_update("""
+                "size": len(content), "res": resolution,
+            }
+            if _videos_has_context_id:
+                params["ctx"] = context_id
+            execute_update(f"""
                 INSERT INTO videos
                 (video_id, filename, volume_path, uf, store_id, video_date,
                  file_size_bytes, duration_seconds, fps, resolution, total_frames,
-                 upload_timestamp, status, media_type, context_id)
+                 upload_timestamp, status, media_type{ctx_col})
                 VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
-                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO', %(ctx)s)
-            """, {
+                        %(size)s, 0, 0, %(res)s, 1, NOW(), 'PENDING', 'PHOTO'{ctx_val})
+            """, params)
+        else:
+            meta = get_video_metadata(tmp.name)
+            params = {
                 "vid": video_id, "name": filename, "path": volume_path,
                 "uf": parsed["uf"], "sid": parsed["store_id"], "vd": parsed["video_date"],
                 "size": len(content),
                 "dur": meta.get("duration_seconds", 0), "fps": meta.get("fps", 0),
                 "res": meta.get("resolution", ""), "tf": meta.get("total_frames", 0),
-                "ctx": context_id,
-            })
+            }
+            if _videos_has_context_id:
+                params["ctx"] = context_id
+            execute_update(f"""
+                INSERT INTO videos
+                (video_id, filename, volume_path, uf, store_id, video_date,
+                 file_size_bytes, duration_seconds, fps, resolution, total_frames,
+                 upload_timestamp, status, media_type{ctx_col})
+                VALUES (%(vid)s, %(name)s, %(path)s, %(uf)s, %(sid)s, %(vd)s,
+                        %(size)s, %(dur)s, %(fps)s, %(res)s, %(tf)s, NOW(), 'PENDING', 'VIDEO'{ctx_val})
+            """, params)
 
         worker = ProcessingWorker()
         worker.start_processing(video_id)
