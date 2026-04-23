@@ -17,23 +17,38 @@ from PIL import Image as PILImage
 _context_id_ensured = False
 
 def _ensure_context_id_column():
-    """Ensure videos table has context_id column, add it if missing. Called lazily on first upload."""
+    """Ensure videos table has context_id column, add it if missing."""
     global _context_id_ensured
     if _context_id_ensured:
         return
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'context_id'"
-        )
-        if not cur.fetchone():
-            cur.execute("ALTER TABLE videos ADD COLUMN context_id BIGINT")
-            logger.info("Added context_id column to videos table")
-        cur.close()
+
+    # Check if column already exists
+    rows = execute_query(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'videos' AND column_name = 'context_id'"
+    )
+    if rows:
         _context_id_ensured = True
-    except Exception as e:
-        logger.warning(f"Could not ensure context_id on videos: {e}")
+        return
+
+    # Column missing — try multiple approaches to add it
+    approaches = [
+        "ALTER TABLE videos ADD COLUMN context_id BIGINT",
+        'ALTER TABLE "videos" ADD COLUMN "context_id" BIGINT',
+        "ALTER TABLE public.videos ADD COLUMN context_id BIGINT",
+    ]
+    last_err = None
+    for sql in approaches:
+        try:
+            execute_update(sql)
+            logger.info(f"Added context_id to videos via: {sql}")
+            _context_id_ensured = True
+            return
+        except Exception as e:
+            last_err = e
+            logger.warning(f"ALTER attempt failed ({sql}): {e}")
+
+    # All attempts failed — raise so the user sees the real error
+    raise RuntimeError(f"Cannot add context_id column to videos table: {last_err}")
 
 
 def _get_default_context_id() -> int:
