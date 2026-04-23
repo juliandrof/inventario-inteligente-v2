@@ -7,7 +7,7 @@ env:
   - name: DBXSC_AI_DB_PORT
     value: "5432"
   - name: DBXSC_AI_DB_NAME
-    value: "scenic_crawler"
+    value: "inventario_v2"
   - name: DBXSC_AI_DB_SCHEMA
     value: "public"
   - name: DBXSC_AI_LAKEBASE_PROJECT

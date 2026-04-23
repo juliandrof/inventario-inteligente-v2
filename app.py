@@ -55,66 +55,6 @@ async def health():
     return info
 
 
-@app.post("/api/migrate")
-async def run_migration():
-    """Transfer ownership of all tables to current user, then drop and recreate."""
-    from server.database import get_connection
-    results = []
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("SELECT current_user")
-        me = cur.fetchone()[0]
-        results.append(f"current_user: {me}")
-
-        # Find all distinct owners
-        cur.execute("SELECT DISTINCT tableowner FROM pg_tables WHERE schemaname = 'public'")
-        owners = [r[0] for r in cur.fetchall()]
-        results.append(f"table owners: {owners}")
-
-        # Reassign ownership from old owners to current user
-        for old_owner in owners:
-            if old_owner != me:
-                try:
-                    cur.execute(f'REASSIGN OWNED BY "{old_owner}" TO "{me}"')
-                    results.append(f"reassigned from {old_owner} to {me}")
-                except Exception as e:
-                    results.append(f"reassign from {old_owner} failed: {e}")
-
-        # Now drop all tables
-        cur.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename")
-        tables = [r[0] for r in cur.fetchall()]
-        for t in tables:
-            try:
-                cur.execute(f'DROP TABLE IF EXISTS "{t}" CASCADE')
-                results.append(f"dropped: {t}")
-            except Exception as e:
-                results.append(f"drop {t} failed: {e}")
-
-        cur.close()
-
-        # Recreate all tables
-        from server.database import _auto_create_tables, _create_training_tables
-        conn2 = get_connection()
-        _auto_create_tables(conn2)
-        results.append("core tables recreated")
-        _create_training_tables(conn2)
-        results.append("training tables recreated")
-
-        # Verify
-        cur2 = conn2.cursor()
-        cur2.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'videos' ORDER BY ordinal_position")
-        cols = [r[0] for r in cur2.fetchall()]
-        results.append(f"videos columns: {cols}")
-        cur2.close()
-
-    except Exception as e:
-        import traceback
-        results.append(f"ERROR: {e}\n{traceback.format_exc()}")
-    return {"results": results}
-
-
 app.include_router(videos.router, prefix="/api/videos", tags=["Videos"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
