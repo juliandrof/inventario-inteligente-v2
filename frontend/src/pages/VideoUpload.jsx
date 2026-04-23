@@ -33,6 +33,9 @@ function VideoUpload({ navigate }) {
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [yoloModels, setYoloModels] = useState([]);
 
+  // Step 2 state - Frame interval
+  const [frameInterval, setFrameInterval] = useState(2);
+
   // Step 4 state - Processing
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
@@ -125,9 +128,11 @@ function VideoUpload({ navigate }) {
     setStep(4);
 
     try {
-      // Save detection mode
+      // Save detection mode and frame interval
       setUploadProgress('Configurando modo de deteccao...');
       await setDetectionMode(detectionMode);
+      const scanFps = (1 / frameInterval).toFixed(2);
+      await updateConfig('scan_fps', scanFps, 'Frames por segundo para analise');
 
       // Save LLM model if applicable
       if ((detectionMode === 'LLM' || detectionMode === 'HYBRID') && effectiveLLM) {
@@ -326,6 +331,20 @@ function VideoUpload({ navigate }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {files.some(f => !IMAGE_EXTS.includes(f.name.split('.').pop()?.toLowerCase())) && (
+            <div className="card" style={{ padding: '14px 18px' }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 8 }}>
+                Intervalo de frames (para videos): a cada {frameInterval} segundo{frameInterval > 1 ? 's' : ''}
+              </label>
+              <input type="range" min="1" max="10" step="1" value={frameInterval}
+                onChange={e => setFrameInterval(Number(e.target.value))}
+                style={{ width: '100%' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9CA3AF' }}>
+                <span>1s (mais frames)</span><span>5s</span><span>10s (menos frames)</span>
+              </div>
             </div>
           )}
 

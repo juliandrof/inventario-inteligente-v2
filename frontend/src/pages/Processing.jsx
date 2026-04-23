@@ -35,7 +35,7 @@ function Processing({ navigate }) {
     if (!fixtures[id]) {
       try {
         const f = await fetchVideoFixtures(id);
-        setFixtures(prev => ({ ...prev, [id]: f }));
+        setFixtures(prev => ({ ...prev, [id]: f.summary || f.fixtures || f || [] }));
       } catch (_) {}
     }
   };
@@ -144,15 +144,19 @@ function Processing({ navigate }) {
                 )}
 
                 {/* Expanded: fixture details */}
-                {isExpanded && v.status === 'COMPLETED' && (
-                  <div style={{ padding: '0 16px 12px', borderTop: '1px solid #F3F4F6' }}>
-                    {flist.length === 0 ? (
+                {isExpanded && (
+                  <div style={{ padding: '8px 16px 12px', borderTop: '1px solid #F3F4F6' }}>
+                    {v.status === 'PROCESSING' || v.status === 'PENDING' ? (
+                      <div style={{ padding: 8, color: '#6B7280', fontSize: 13 }}>Processando...</div>
+                    ) : v.status === 'FAILED' ? (
+                      <div style={{ padding: 8, color: '#EF4444', fontSize: 13 }}>{v.error_message || 'Falha no processamento'}</div>
+                    ) : !flist || flist.length === 0 ? (
                       <div className="empty-state" style={{ padding: 12 }}>Nenhum objeto detectado</div>
                     ) : (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         {flist.map(s => (
                           <div key={s.fixture_type} style={{ background: '#F9FAFB', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}>
-                            <div className="fixture-type-dot" style={{ background: TYPE_COLORS[s.fixture_type] || '#666', display: 'inline-block', width: 8, height: 8, borderRadius: '50%', marginRight: 6 }} />
+                            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: TYPE_COLORS[s.fixture_type] || '#666', marginRight: 6 }} />
                             <strong>{s.fixture_type}</strong>: {s.total_count} unidades
                           </div>
                         ))}
